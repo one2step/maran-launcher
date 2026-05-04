@@ -74,21 +74,73 @@ def check_mac_reachable():
         return False
 
 
+def _refresh_path_from_registry():
+    """winget 설치 후 PATH 변경을 현재 프로세스에 반영."""
+    if os.name != "nt":
+        return
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ) as k:
+            sys_path = winreg.QueryValueEx(k, "Path")[0]
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            user_path = winreg.QueryValueEx(k, "Path")[0]
+        os.environ["PATH"] = sys_path + os.pathsep + user_path
+    except Exception:
+        pass
+
+
 def find_code_exe():
-    """code / code.cmd 의 실제 경로를 반환. PATH에 없어도 일반 설치 위치 탐색."""
+    """code.cmd / code / Code.exe 의 실제 경로 반환. PATH·레지스트리·일반 설치 위치 모두 탐색."""
+    # 1) 현재 PATH
     for name in ("code.cmd", "code"):
         p = shutil.which(name)
         if p:
             return p
+
+    # 2) PATH를 시스템 레지스트리에서 다시 읽고 재시도 (winget 직후 대비)
+    _refresh_path_from_registry()
+    for name in ("code.cmd", "code"):
+        p = shutil.which(name)
+        if p:
+            return p
+
+    # 3) 일반 설치 위치 직접 탐색
     candidates = [
         Path(os.environ.get("LOCALAPPDATA", ""))
             / "Programs" / "Microsoft VS Code" / "bin" / "code.cmd",
         Path(r"C:\Program Files\Microsoft VS Code\bin\code.cmd"),
         Path(r"C:\Program Files (x86)\Microsoft VS Code\bin\code.cmd"),
+        # Insiders 빌드도 대응
+        Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Programs" / "Microsoft VS Code Insiders" / "bin" / "code-insiders.cmd",
     ]
     for c in candidates:
         if c.exists():
             return str(c)
+
+    # 4) 레지스트리에서 vscode 핸들러 경로 추출
+    if os.name == "nt":
+        try:
+            import winreg
+            import re as _re
+            with winreg.OpenKey(
+                winreg.HKEY_CLASSES_ROOT, r"vscode\shell\open\command"
+            ) as k:
+                cmd_str = winreg.QueryValueEx(k, "")[0]
+            m = _re.match(r'"([^"]+)"', cmd_str)
+            if m:
+                exe_path = m.group(1)
+                # Code.exe → bin/code.cmd 추정
+                bin_cmd = Path(exe_path).parent / "bin" / "code.cmd"
+                if bin_cmd.exists():
+                    return str(bin_cmd)
+                if Path(exe_path).exists():
+                    return exe_path
+        except Exception:
+            pass
     return None
 
 
@@ -97,18 +149,17 @@ def check_vscode_installed():
 
 
 def check_remote_ssh_extension():
-    code = find_code_exe()
-    if not code:
+    """파일 시스템 직접 검사: ~/.vscode/extensions/ 안에 ms-vscode-remote.remote-ssh-* 있는지."""
+    ext_root = Path.home() / ".vscode" / "extensions"
+    if not ext_root.exists():
         return False
     try:
-        r = subprocess.run(
-            [code, "--list-extensions"],
-            shell=True, capture_output=True, text=True,
-            timeout=15, creationflags=CREATE_NO_WINDOW,
-        )
-        return "ms-vscode-remote.remote-ssh" in (r.stdout or "")
-    except Exception:
-        return False
+        for d in ext_root.iterdir():
+            if d.is_dir() and d.name.lower().startswith("ms-vscode-remote.remote-ssh"):
+                return True
+    except OSError:
+        pass
+    return False
 
 
 def check_windows_terminal():
@@ -775,11 +826,16 @@ class MainView:
         if not code:
             return False
         try:
-            subprocess.Popen(
-                [code, "--remote", host_spec, MAC_PROJECT_PATH],
-                shell=True if os.name == "nt" else False,
-                creationflags=CREATE_NO_WINDOW,
-            )
+            if os.name == "nt":
+                # 경로에 공백 있어도 안전하게 인용 처리한 문자열 명령
+                cmd_str = f'"{code}" --remote {host_spec} "{MAC_PROJECT_PATH}"'
+                subprocess.Popen(
+                    cmd_str, shell=True, creationflags=CREATE_NO_WINDOW,
+                )
+            else:
+                subprocess.Popen(
+                    [code, "--remote", host_spec, MAC_PROJECT_PATH]
+                )
             return True
         except Exception:
             return False
