@@ -74,17 +74,35 @@ def check_mac_reachable():
         return False
 
 
+def find_code_exe():
+    """code / code.cmd 의 실제 경로를 반환. PATH에 없어도 일반 설치 위치 탐색."""
+    for name in ("code.cmd", "code"):
+        p = shutil.which(name)
+        if p:
+            return p
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Programs" / "Microsoft VS Code" / "bin" / "code.cmd",
+        Path(r"C:\Program Files\Microsoft VS Code\bin\code.cmd"),
+        Path(r"C:\Program Files (x86)\Microsoft VS Code\bin\code.cmd"),
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return None
+
+
 def check_vscode_installed():
-    return (shutil.which("code") is not None
-            or shutil.which("code.cmd") is not None)
+    return find_code_exe() is not None
 
 
 def check_remote_ssh_extension():
-    if not check_vscode_installed():
+    code = find_code_exe()
+    if not code:
         return False
     try:
         r = subprocess.run(
-            "code --list-extensions",
+            [code, "--list-extensions"],
             shell=True, capture_output=True, text=True,
             timeout=15, creationflags=CREATE_NO_WINDOW,
         )
@@ -174,13 +192,14 @@ def install_windows_terminal(log_fn):
 
 
 def install_remote_ssh_extension(log_fn):
-    if not check_vscode_installed():
-        return False, "VS Code 먼저 설치 필요"
-    log_fn("Remote-SSH 확장 설치 중...")
+    code = find_code_exe()
+    if not code:
+        return False, "VS Code 먼저 설치 필요 (PATH 못 찾음)"
+    log_fn(f"Remote-SSH 확장 설치 중... ({code})")
     try:
         r = subprocess.run(
-            "code --install-extension ms-vscode-remote.remote-ssh --force",
-            shell=True, capture_output=True, text=True, timeout=120,
+            [code, "--install-extension", "ms-vscode-remote.remote-ssh", "--force"],
+            shell=True, capture_output=True, text=True, timeout=180,
             creationflags=CREATE_NO_WINDOW,
         )
         if r.returncode == 0:
@@ -238,26 +257,36 @@ def push_ssh_key_to_mac(log_fn):
     if not check_mac_reachable():
         return False, "맥미니 도달 불가. Tailscale 로그인을 먼저 완료하세요."
 
-    # PowerShell 스크립트 생성 (임시 파일)
+    # PowerShell 스크립트 생성 (ASCII only, PS 5.1 호환).
+    # echo '<key>' >> 방식: pipe 인코딩 이슈 회피.
+    pub_path_safe = str(pub).replace("'", "''")
     script = f"""
-Write-Host "맥미니 비밀번호를 한 번 입력하세요." -ForegroundColor Yellow
-Write-Host "(이후로는 무비번 SSH가 됩니다)" -ForegroundColor DarkGray
-Write-Host ""
-$pubkey = Get-Content "{pub}"
-$pubkey | ssh {MAC_USER}@{MAC_HOST} 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
-if ($?) {{
-    Write-Host ""
-    Write-Host "[OK] 등록 완료. 마란 런처에서 '새로고침'을 누르세요." -ForegroundColor Green
+$ErrorActionPreference = 'Stop'
+Write-Host ''
+Write-Host 'Enter Mac password ONCE when prompted.' -ForegroundColor Yellow
+Write-Host '(After this, SSH will work without password.)' -ForegroundColor DarkGray
+Write-Host ''
+
+$pub = (Get-Content -LiteralPath '{pub_path_safe}' -Raw).Trim()
+$cmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '$pub' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+
+ssh -o StrictHostKeyChecking=accept-new {MAC_USER}@{MAC_HOST} $cmd
+$ok = $LASTEXITCODE -eq 0
+
+Write-Host ''
+if ($ok) {{
+    Write-Host '[OK] Registered. Click Refresh in Maran Launcher.' -ForegroundColor Green
 }} else {{
-    Write-Host ""
-    Write-Host "[FAIL] 등록 실패. 비밀번호 / 네트워크 확인." -ForegroundColor Red
+    Write-Host '[FAIL] Registration failed.' -ForegroundColor Red
+    Write-Host '       Check: password correct? Mac reachable via Tailscale?' -ForegroundColor DarkGray
 }}
-Write-Host ""
-Read-Host "Enter 누르면 닫힙니다"
+Write-Host ''
+Read-Host 'Press Enter to close'
 """.strip()
 
     tmp = Path(tempfile.gettempdir()) / "maran_push_key.ps1"
-    tmp.write_text(script, encoding="utf-8")
+    # UTF-8 with BOM 으로 저장 → PS 5.1이 인코딩 정확히 인식
+    tmp.write_bytes(b"\xef\xbb\xbf" + script.encode("utf-8"))
 
     try:
         subprocess.Popen(
@@ -729,21 +758,17 @@ class MainView:
     @staticmethod
     def _launch_vscode():
         host_spec = f"ssh-remote+{MAC_USER}@{MAC_HOST}"
-        if os.name == "nt":
-            cmd = f'code --remote {host_spec} "{MAC_PROJECT_PATH}"'
-            try:
-                subprocess.Popen(
-                    cmd, shell=True, creationflags=CREATE_NO_WINDOW,
-                )
-                return True
-            except Exception:
-                return False
+        code = find_code_exe()
+        if not code:
+            return False
         try:
             subprocess.Popen(
-                ["code", "--remote", host_spec, MAC_PROJECT_PATH]
+                [code, "--remote", host_spec, MAC_PROJECT_PATH],
+                shell=True if os.name == "nt" else False,
+                creationflags=CREATE_NO_WINDOW,
             )
             return True
-        except FileNotFoundError:
+        except Exception:
             return False
 
     @staticmethod
