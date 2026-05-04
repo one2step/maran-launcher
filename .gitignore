@@ -1,0 +1,12 @@
+build/
+dist/
+__pycache__/
+*.spec
+*.pyc
+*.pyo
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+*.tmp
