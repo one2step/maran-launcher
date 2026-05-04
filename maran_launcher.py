@@ -821,24 +821,68 @@ class MainView:
 
     @staticmethod
     def _launch_vscode():
+        """다중 폴백:
+        1) vscode:// URL 핸들러 (PATH 의존 X, 가장 확실)
+        2) code --folder-uri (canonical CLI 방식)
+        3) code --remote (legacy CLI 방식)
+        """
         host_spec = f"ssh-remote+{MAC_USER}@{MAC_HOST}"
+        # vscode:// URL 핸들러는 vscode-remote/ssh-remote+host/path 를 wrap 해서 받음
+        wrapper_url = (
+            f"vscode://vscode-remote/ssh-remote+{MAC_USER}@{MAC_HOST}{MAC_PROJECT_PATH}"
+        )
+        folder_uri = (
+            f"vscode-remote://ssh-remote+{MAC_USER}@{MAC_HOST}{MAC_PROJECT_PATH}"
+        )
+
+        # 1) Windows: URL 핸들러 (PATH/code.cmd 의존성 0)
+        if os.name == "nt":
+            try:
+                os.startfile(wrapper_url)
+                return True
+            except Exception:
+                pass
+            # cmd start 폴백 (URL 핸들러 다른 경로)
+            try:
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "", wrapper_url],
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                return True
+            except Exception:
+                pass
+
+        # 2) code --folder-uri (canonical)
         code = find_code_exe()
-        if not code:
-            return False
-        try:
-            if os.name == "nt":
-                # 경로에 공백 있어도 안전하게 인용 처리한 문자열 명령
-                cmd_str = f'"{code}" --remote {host_spec} "{MAC_PROJECT_PATH}"'
-                subprocess.Popen(
-                    cmd_str, shell=True, creationflags=CREATE_NO_WINDOW,
-                )
-            else:
-                subprocess.Popen(
-                    [code, "--remote", host_spec, MAC_PROJECT_PATH]
-                )
-            return True
-        except Exception:
-            return False
+        if code:
+            try:
+                if os.name == "nt":
+                    cmd_str = f'"{code}" --folder-uri "{folder_uri}"'
+                    subprocess.Popen(
+                        cmd_str, shell=True, creationflags=CREATE_NO_WINDOW,
+                    )
+                else:
+                    subprocess.Popen([code, "--folder-uri", folder_uri])
+                return True
+            except Exception:
+                pass
+
+            # 3) code --remote (legacy)
+            try:
+                if os.name == "nt":
+                    cmd_str = f'"{code}" --remote {host_spec} "{MAC_PROJECT_PATH}"'
+                    subprocess.Popen(
+                        cmd_str, shell=True, creationflags=CREATE_NO_WINDOW,
+                    )
+                else:
+                    subprocess.Popen(
+                        [code, "--remote", host_spec, MAC_PROJECT_PATH]
+                    )
+                return True
+            except Exception:
+                pass
+
+        return False
 
     @staticmethod
     def _launch_terminal(run_claude):
