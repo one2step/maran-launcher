@@ -192,21 +192,34 @@ def install_windows_terminal(log_fn):
 
 
 def install_remote_ssh_extension(log_fn):
-    code = find_code_exe()
-    if not code:
-        return False, "VS Code 먼저 설치 필요 (PATH 못 찾음)"
-    log_fn(f"Remote-SSH 확장 설치 중... ({code})")
+    """VS Code의 Remote-SSH 확장 페이지를 직접 띄움. 사용자가 [Install] 클릭."""
+    if not check_vscode_installed():
+        return False, "VS Code 먼저 설치 필요"
+
+    url = "vscode:extension/ms-vscode-remote.remote-ssh"
+
+    # 방법 1: os.startfile (Windows ShellExecute, vscode:// 핸들러 호출)
     try:
-        r = subprocess.run(
-            [code, "--install-extension", "ms-vscode-remote.remote-ssh", "--force"],
-            shell=True, capture_output=True, text=True, timeout=180,
+        os.startfile(url)
+        log_fn("VS Code 확장 페이지를 열었습니다.")
+        log_fn("→ VS Code 화면에서 [Install] 버튼 클릭")
+        log_fn("→ 마란 런처로 돌아와서 '🔄 새로고침' 클릭")
+        return True, "VS Code에서 [Install] 클릭 → 새로고침"
+    except Exception:
+        pass
+
+    # 방법 2: cmd /c start 폴백
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", "start", "", url],
             creationflags=CREATE_NO_WINDOW,
         )
-        if r.returncode == 0:
-            return True, "확장 설치 완료"
-        return False, (r.stderr or r.stdout or "")[:200]
+        log_fn("VS Code 확장 페이지를 열었습니다.")
+        log_fn("→ VS Code 화면에서 [Install] 버튼 클릭")
+        log_fn("→ 마란 런처로 돌아와서 '🔄 새로고침' 클릭")
+        return True, "VS Code에서 [Install] 클릭 → 새로고침"
     except Exception as e:
-        return False, str(e)
+        return False, f"VS Code 실행 실패: {e}"
 
 
 def open_tailscale_app(log_fn):
@@ -435,7 +448,7 @@ class SetupView:
              check_vscode_installed, install_vscode, "설치", False),
             ("remote_ssh", "VS Code Remote-SSH 확장 (옵션)",
              check_remote_ssh_extension, install_remote_ssh_extension,
-             "설치", False),
+             "VS Code 열기", False),
             ("wt", "Windows Terminal (옵션)",
              check_windows_terminal, install_windows_terminal, "설치", False),
         ]
