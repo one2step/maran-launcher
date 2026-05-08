@@ -27,7 +27,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.2.0"  # release 태그와 일치시킬 것 (v2.2.0)
+__version__ = "2.2.1"  # release 태그와 일치시킬 것 (v2.2.1)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -1323,18 +1323,11 @@ class MainView:
         )
         self.btn_term.pack(side=tk.LEFT, padx=6)
 
-        # 옵션 (작게)
+        # 옵션 (작게) — auto-close 제거 (v2.2.1+, 항상 창 유지, 트레이로만 닫음)
         opts = tk.Frame(self.frame, bg=COLOR_BG)
         opts.pack(fill=tk.X, padx=20, pady=(2, 4))
-        self.auto_close = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            opts, text="auto-close",
-            variable=self.auto_close,
-            font=FONT_MONO_TINY,
-            fg=COLOR_DIM, bg=COLOR_BG,
-            selectcolor=COLOR_PANEL2,
-            activebackground=COLOR_BG, activeforeground=COLOR_FG, bd=0,
-        ).pack(side=tk.LEFT)
+        # 호환성 위해 변수만 유지 (코드 다른 곳에서 참조하지 않게 됐지만 안전망)
+        self.auto_close = tk.BooleanVar(value=False)
         self.auto_claude = tk.BooleanVar(value=True)
         tk.Checkbutton(
             opts, text="shell→claude",
@@ -1343,7 +1336,11 @@ class MainView:
             fg=COLOR_DIM, bg=COLOR_BG,
             selectcolor=COLOR_PANEL2,
             activebackground=COLOR_BG, activeforeground=COLOR_FG, bd=0,
-        ).pack(side=tk.LEFT, padx=(8, 0))
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            opts, text="  · close → tray ([×])  · re-open → Ctrl+Alt+M",
+            font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_BG,
+        ).pack(side=tk.LEFT)
 
         self._sep(self.frame)
 
@@ -1992,12 +1989,10 @@ class MainView:
             self.s_run.ok()
             self.log(done_msg)
 
-            if self.auto_close.get():
-                self.frame.after(1500, self.frame.master.destroy)
-            else:
-                self.btn_vscode.config(state=tk.NORMAL)
-                self.btn_office.config(state=tk.NORMAL)
-                self.btn_term.config(state=tk.NORMAL)
+            # v2.2.1: 작업 완료 후에도 창은 계속 띄움. 트레이([×])로 사용자가 직접 닫음.
+            self.btn_vscode.config(state=tk.NORMAL)
+            self.btn_office.config(state=tk.NORMAL)
+            self.btn_term.config(state=tk.NORMAL)
         except Exception as e:
             self.log(f"예기치 않은 오류: {e}")
             self._fail()
