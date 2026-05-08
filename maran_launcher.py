@@ -27,13 +27,19 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "1.1.0"  # release 태그와 일치시킬 것 (v1.1.0)
+__version__ = "1.2.0"  # release 태그와 일치시킬 것 (v1.2.0)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
 
 # === 파일 드롭존 ===
 INBOX_REMOTE_DIR = "~/MARAN/inbox"
+OUTBOX_REMOTE_DIR = "~/MARAN/outbox"  # Mac→Windows 방향 (Claude가 올리는 곳)
+
+# === NAS (SMB 공유) ===
+SMB_SHARE_NAME = "MARAN"
+SMB_PATH_WIN = f"\\\\{MAC_HOST}\\{SMB_SHARE_NAME}"      # \\100.122.161.94\MARAN
+SMB_PATH_URL = f"smb://{MAC_HOST}/{SMB_SHARE_NAME}"     # smb://100.122.161.94/MARAN
 
 # === 사무실 모드 (Pixel Agents) ===
 PIXEL_AGENTS_EXT_ID = "pablodelucca.pixel-agents"
@@ -506,6 +512,33 @@ def install_pixel_agents_extension(log_fn):
             return False, f"VS Code 실행 실패: {e}"
 
 
+def open_smb_folder(log_fn=None):
+    """탐색기에서 \\\\100.122.161.94\\MARAN 자동으로 열기.
+    첫 접근이면 Windows가 자격증명 묻는 창 띄움."""
+    if os.name != "nt":
+        return False, "Windows 전용 (Mac에선 Finder → Cmd+K → smb://100.122.161.94)"
+    try:
+        os.startfile(SMB_PATH_WIN)
+        if log_fn:
+            log_fn(f"탐색기에서 {SMB_PATH_WIN} 열림")
+        return True, f"탐색기 열림: {SMB_PATH_WIN}"
+    except Exception as e:
+        # 폴백: cmd start
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", SMB_PATH_WIN],
+                creationflags=CREATE_NO_WINDOW,
+            )
+            return True, "탐색기 열림 (cmd 폴백)"
+        except Exception as e2:
+            return False, f"실패: {e} / {e2}"
+
+
+def get_smb_address_text():
+    """클립보드 복사용 SMB 주소 (Windows 형식 + URL 형식 둘 다)."""
+    return f"{SMB_PATH_WIN}\n{SMB_PATH_URL}"
+
+
 def trigger_self_update(log_fn=None):
     """install.ps1 (i.ps1)을 PowerShell 새 창에서 실행 → 자동 다운로드 + 교체."""
     if os.name != "nt":
@@ -525,12 +558,12 @@ def trigger_self_update(log_fn=None):
 
 
 def ensure_inbox_dir():
-    """Mac mini에 ~/MARAN/inbox/ 폴더 보장. 한번만 호출하면 충분."""
+    """Mac mini에 ~/MARAN/inbox/ + ~/MARAN/outbox/ 폴더 보장. 한번만 호출하면 충분."""
     try:
         subprocess.run(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
              f"{MAC_USER}@{MAC_HOST}",
-             f"mkdir -p {INBOX_REMOTE_DIR}"],
+             f"mkdir -p {INBOX_REMOTE_DIR} {OUTBOX_REMOTE_DIR}"],
             capture_output=True, timeout=10,
             creationflags=CREATE_NO_WINDOW,
         )
@@ -1138,35 +1171,101 @@ class MainView:
             activebackground=COLOR_BG, activeforeground=COLOR_FG, bd=0,
         ).pack(side=tk.LEFT, padx=8)
 
-        # === 파일 드롭존 ===
-        drop_label_text = (
-            "📥 여기로 파일 드래그 또는 Ctrl+V"
-            if HAS_WINDND else
-            "📥 Ctrl+V로 클립보드 파일/이미지 전송"
+        # === NAS 빠른 액션 (1줄) ===
+        nas_bar = tk.Frame(self.frame, bg=COLOR_BG)
+        nas_bar.pack(fill=tk.X, padx=20, pady=(6, 2))
+
+        tk.Label(
+            nas_bar, text="📂 NAS",
+            font=("맑은 고딕", 9, "bold"),
+            fg=COLOR_FG, bg=COLOR_BG,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            nas_bar, text="📁 폴더 열기",
+            font=("맑은 고딕", 9),
+            bg=COLOR_BTN_NEUTRAL, fg=COLOR_FG,
+            activebackground=COLOR_BTN_NEUTRAL_HOVER,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._open_smb_folder,
+            padx=8, pady=2,
+        ).pack(side=tk.LEFT, padx=2)
+
+        tk.Button(
+            nas_bar, text="📋 주소 복사",
+            font=("맑은 고딕", 9),
+            bg=COLOR_BTN_NEUTRAL, fg=COLOR_FG,
+            activebackground=COLOR_BTN_NEUTRAL_HOVER,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._copy_smb_address,
+            padx=8, pady=2,
+        ).pack(side=tk.LEFT, padx=2)
+
+        tk.Label(
+            nas_bar, text=SMB_PATH_WIN,
+            font=("Consolas", 8),
+            fg=COLOR_DIM, bg=COLOR_BG,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        # === 큰 파일 전송 영역 (최하단, 확실히 보이게) ===
+        drop_outer = tk.Frame(
+            self.frame, bg=COLOR_PANEL,
+            highlightbackground=COLOR_DIM, highlightthickness=1,
         )
-        self.drop_zone = tk.Label(
-            self.frame,
-            text=f"{drop_label_text}\n→ Mac mini ~/MARAN/inbox/",
+        drop_outer.pack(fill=tk.BOTH, expand=True, padx=20, pady=(6, 14))
+
+        self.drop_title = tk.Label(
+            drop_outer, text="📥  파일 전송 → ~/MARAN/inbox/",
+            font=("맑은 고딕", 11, "bold"),
+            fg=COLOR_FG, bg=COLOR_PANEL,
+        )
+        self.drop_title.pack(pady=(14, 4))
+
+        hint_text = (
+            "여기로 파일 드래그하거나 아래 버튼" if HAS_WINDND
+            else "아래 버튼으로 파일/클립보드 전송"
+        )
+        tk.Label(
+            drop_outer, text=hint_text,
             font=("맑은 고딕", 9),
             fg=COLOR_DIM, bg=COLOR_PANEL,
-            relief=tk.FLAT, bd=1,
-            padx=10, pady=12,
-            cursor="hand2",
-            justify=tk.CENTER,
-        )
-        self.drop_zone.pack(fill=tk.X, padx=24, pady=(2, 10))
+        ).pack(pady=(0, 12))
 
-        # 클릭 시 파일 선택 다이얼로그
-        self.drop_zone.bind("<Button-1>", lambda e: self._pick_file_to_upload())
+        drop_btns = tk.Frame(drop_outer, bg=COLOR_PANEL)
+        drop_btns.pack(pady=(0, 16))
 
-        # Ctrl+V 클립보드 paste 바인딩 (frame 전체)
+        tk.Button(
+            drop_btns, text="📁 파일 업로드",
+            font=("맑은 고딕", 10, "bold"),
+            bg=COLOR_BTN_VSCODE, fg="#1e1e2e",
+            activebackground=COLOR_BTN_VSCODE_HOVER,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._pick_file_to_upload,
+            padx=14, pady=6, width=12,
+        ).pack(side=tk.LEFT, padx=6)
+
+        tk.Button(
+            drop_btns, text="📋 클립보드",
+            font=("맑은 고딕", 10, "bold"),
+            bg=COLOR_BTN_TERM, fg="#1e1e2e",
+            activebackground=COLOR_BTN_TERM_HOVER,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._handle_paste,
+            padx=14, pady=6, width=12,
+        ).pack(side=tk.LEFT, padx=6)
+
+        # 결과 피드백용 라벨 (조용히 깜박이는 색)
+        self.drop_zone = drop_outer  # 호환성 (_flash_drop_zone에서 사용)
+
+        # Ctrl+V 클립보드 paste 바인딩 (frame 전체에서 동작)
         self.frame.bind_all("<Control-v>", self._handle_paste)
         self.frame.bind_all("<Control-V>", self._handle_paste)
 
-        # windnd 드래그&드롭 hook
+        # windnd 드래그&드롭 — outer frame + 안쪽 라벨/버튼 모두 수신
         if HAS_WINDND:
             try:
-                windnd.hook_dropfiles(self.drop_zone, func=self._handle_drop)
+                windnd.hook_dropfiles(drop_outer, func=self._handle_drop)
+                windnd.hook_dropfiles(self.drop_title, func=self._handle_drop)
             except Exception:
                 pass
 
@@ -1270,13 +1369,35 @@ class MainView:
             self._flash_drop_zone(COLOR_ERROR)
 
     def _flash_drop_zone(self, color):
-        """드롭존 색깔 잠깐 깜박여서 결과 시각 피드백."""
+        """드롭존 타이틀 색깔 잠깐 깜박여서 결과 시각 피드백."""
         try:
-            orig = self.drop_zone.cget("fg")
-            self.drop_zone.config(fg=color)
-            self.frame.after(800, lambda: self.drop_zone.config(fg=orig))
+            orig = self.drop_title.cget("fg")
+            self.drop_title.config(fg=color)
+            self.frame.after(900, lambda: self.drop_title.config(fg=orig))
         except Exception:
             pass
+
+    # ============================================================
+    # NAS (SMB)
+    # ============================================================
+
+    def _open_smb_folder(self):
+        ok, msg = open_smb_folder(self.log)
+        if not ok:
+            self.log(f"❌ NAS 폴더 열기 실패: {msg}")
+        else:
+            self.log(f"📂 {msg}")
+            self.log("   (첫 접근시 자격증명 창: moran / Mac 비번)")
+
+    def _copy_smb_address(self):
+        addr = get_smb_address_text()
+        try:
+            self.frame.clipboard_clear()
+            self.frame.clipboard_append(addr)
+            self.frame.update()  # 클립보드 영구화 (창 닫혀도 유지)
+            self.log(f"📋 SMB 주소 복사됨: {SMB_PATH_WIN}")
+        except Exception as e:
+            self.log(f"❌ 클립보드 실패: {e}")
 
     def log(self, msg):
         self.log_var.set(msg)
@@ -1524,8 +1645,10 @@ class MaranLauncher:
 
     def show_main(self):
         self.setup_view.pack_forget()
-        # 사무실 버튼 + 드롭존 추가로 세로 키움
-        self.root.geometry(self._center(500, 580))
+        # 사무실 버튼 + NAS 액션 + 큰 드롭존 영역으로 세로 더 키움
+        self.root.geometry(self._center(540, 720))
+        # 메인 화면은 사용자가 창 크기 조절 가능 (드롭존 키우려고)
+        self.root.resizable(True, True)
         self.main_view.pack(fill=tk.BOTH, expand=True)
 
     def _center(self, w, h):

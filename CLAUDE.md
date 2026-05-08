@@ -10,6 +10,7 @@ Claude Code가 이 프로젝트에서 작업할 때 필요한 맥락 정보.
 - **세 가지 모드** (v1.1+): VS Code Remote-SSH / **사무실 (VS Code + Pixel Agents)** / Terminal SSH.
 - **자동 업데이트** (v1.1+): 시작 시 GitHub release 체크 → 새 버전 있으면 상단 노란 배너 → 클릭 시 install.ps1 자동 재실행.
 - **파일 드롭존 + Ctrl+V** (v1.1+): 런처 창에 파일 드래그 / 클립보드 이미지·파일 Ctrl+V → scp로 Mac mini `~/MARAN/inbox/` 자동 업로드.
+- **NAS 빠른 액션** (v1.2+): [📁 폴더 열기] 한 번에 Windows 탐색기에서 `\\100.122.161.94\MARAN` 마운트. [📋 주소 복사]로 SMB 주소 클립보드. 큰 드롭존 + [파일 업로드]/[클립보드] 두 버튼 분리 + outbox 폴더 (Mac→Windows 양방향).
 
 ## Repo / 배포
 
