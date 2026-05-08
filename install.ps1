@@ -43,6 +43,16 @@ Write-Host "        $INSTALL_DIR" -ForegroundColor DarkGray
 
 # 2) Download exe
 $exePath = Join-Path $INSTALL_DIR $EXE_LOCAL
+
+# Stop any running launcher (so the .exe isn't locked during overwrite)
+$running = Get-Process -Name "MaranLauncher" -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "  [*] Stopping running launcher " -NoNewline
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 800
+    Write-Host "OK" -ForegroundColor Green
+}
+
 Write-Host "  [2/3] Downloading exe         " -NoNewline
 try {
     Invoke-WebRequest -Uri $EXE_URL -OutFile $exePath -UseBasicParsing
@@ -85,9 +95,15 @@ Write-Host "  Shortcut : Desktop + Start Menu" -ForegroundColor DarkGray
 Write-Host "  Hotkey   : Ctrl + Alt + M" -ForegroundColor DarkGray
 Write-Host ""
 
-$run = Read-Host "  Run now? (Y/n)"
-if ($run -ne "n" -and $run -ne "N") {
+# MARAN_QUIET=1 → 인터랙티브 프롬프트 스킵 + 자동 실행 (auto-update 흐름용)
+if ($env:MARAN_QUIET -eq "1") {
     Start-Process -FilePath $exePath
-    Write-Host "  Launched. First run will show the setup screen." -ForegroundColor Cyan
+    Write-Host "  [auto] Relaunched." -ForegroundColor Green
+} else {
+    $run = Read-Host "  Run now? (Y/n)"
+    if ($run -ne "n" -and $run -ne "N") {
+        Start-Process -FilePath $exePath
+        Write-Host "  Launched. First run will show the setup screen." -ForegroundColor Cyan
+    }
 }
 Write-Host ""

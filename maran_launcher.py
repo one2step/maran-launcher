@@ -27,7 +27,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.2.1"  # release 태그와 일치시킬 것 (v2.2.1)
+__version__ = "2.2.2"  # release 태그와 일치시킬 것 (v2.2.2)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -657,19 +657,57 @@ def get_smb_address_text():
 
 
 def trigger_self_update(log_fn=None):
-    """install.ps1 (i.ps1)을 PowerShell 새 창에서 실행 → 자동 다운로드 + 교체."""
+    """자동 업데이트: 임시 PowerShell 스크립트 → 현재 런처 종료 → 새 .exe 다운로드 → 새 런처 실행.
+    install.ps1이 MARAN_QUIET=1 환경변수 보면 자동 모드로 동작 (Read-Host 스킵)."""
     if os.name != "nt":
         return False, "Windows 전용"
-    cmd = f"irm {INSTALL_URL} | iex"
+
+    script = f"""
+$ErrorActionPreference = 'Continue'
+$Host.UI.RawUI.WindowTitle = 'MARAN.LAUNCH auto-update'
+
+Write-Host ''
+Write-Host '  M  Maran Launcher - Auto Update' -ForegroundColor Cyan
+Write-Host '  --------------------------------' -ForegroundColor DarkGray
+Write-Host ''
+
+Write-Host '  [1/3] Closing current launcher... ' -NoNewline
+Get-Process -Name 'MaranLauncher' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 1000
+Write-Host 'OK' -ForegroundColor Green
+Write-Host ''
+
+Write-Host '  [2/3] Downloading + installing latest...' -ForegroundColor White
+$env:MARAN_QUIET = '1'
+try {{
+    irm {INSTALL_URL} | iex
+}} catch {{
+    Write-Host ''
+    Write-Host '  [!] Update failed: ' -NoNewline -ForegroundColor Red
+    Write-Host $_
+    Write-Host '  Press any key to close this window...' -ForegroundColor DarkGray
+    [void][System.Console]::ReadKey($true)
+    exit 1
+}}
+
+Write-Host ''
+Write-Host '  [3/3] Done. New launcher started.' -ForegroundColor Green
+Write-Host '  This window closes in 3 seconds.' -ForegroundColor DarkGray
+Start-Sleep -Seconds 3
+"""
+
+    tmp = Path(tempfile.gettempdir()) / "maran_self_update.ps1"
+    # PS 5.1 한글 인코딩 회피 위해 UTF-8 BOM
+    tmp.write_bytes(b"\xef\xbb\xbf" + script.encode("utf-8"))
+
     try:
         subprocess.Popen(
-            ["powershell", "-NoExit", "-ExecutionPolicy", "Bypass",
-             "-Command", cmd],
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(tmp)],
             creationflags=CREATE_NEW_CONSOLE,
         )
         if log_fn:
-            log_fn("PowerShell 창에서 업데이트 진행. 끝나면 런처를 다시 켜세요.")
-        return True, "업데이터 띄움"
+            log_fn("자동 업데이트 시작 — 새 PowerShell 창에서 진행, 끝나면 새 런처 자동 실행")
+        return True, "업데이터 시작됨"
     except Exception as e:
         return False, str(e)
 
