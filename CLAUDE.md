@@ -13,6 +13,7 @@ Claude Code가 이 프로젝트에서 작업할 때 필요한 맥락 정보.
 - **NAS 빠른 액션** (v1.2+): [📁 폴더 열기] 한 번에 Windows 탐색기에서 `\\100.122.161.94\MARAN` 마운트. [📋 주소 복사]로 SMB 주소 클립보드. 큰 드롭존 + [파일 업로드]/[클립보드] 두 버튼 분리 + outbox 폴더 (Mac→Windows 양방향).
 - **공유폴더 (NAS 작업 영역)** (v1.3+): [🗂 공유폴더] 버튼 → `\\100.122.161.94\MARAN\shared` 직접 진입. `~/MARAN/shared/`는 NAS처럼 자유롭게 쓰는 작업 폴더 (코드/메모리와 분리). inbox/outbox는 자동화용, shared는 사용자가 직접 들락날락.
 - **v2.0 해커 톤 전면 리디자인** (v2.0+): Mr.Robot/lazygit 영감. 검정 배경 + 옅은 흰 + 네온그린(동작)/앰버(주의)/사이안(정보) 액센트. Cascadia Mono 폰트. 섹션 헤더 STATUS/EXEC/NAS/TRANSFER로 정보 밀도 높임. 클립보드 버튼 제거 (Ctrl+V 통합). 업데이트는 하단 footer에 항상 표시 (새 버전 있으면 빨간 강조). HackerStatusRow 클래스로 `▸ name ......... ● ACTIVE` 한 줄.
+- **DELIVERY 섹션** (v2.1+): Mac→Windows 결과물 자동 전달. Claude/스크립트가 `python scripts/maran_deliver.py <파일> [프로젝트]` 실행 → `~/MARAN/outbox/<프로젝트>/<YYYY-MM-DD_HH-MM>_파일.확장자` 자동 정리 + `_index.json` 갱신. 마란 런처가 30초마다 SSH로 `_index.json` 폴링 → [DELIVERY] 섹션에 최근 5개 표시 (`● 시간 파일명 프로젝트 [📁]`). 새 항목 도착 시 footer `[NEW] delivery` 빨간 깜박. [📁] 클릭 = `explorer.exe /select,SMB경로`로 탐색기에서 파일 선택된 채로 폴더 열림.
 
 ## Repo / 배포
 

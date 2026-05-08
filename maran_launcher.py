@@ -27,7 +27,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.0.0"  # release 태그와 일치시킬 것 (v2.0.0)
+__version__ = "2.1.0"  # release 태그와 일치시킬 것 (v2.1.0)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -42,6 +42,12 @@ SMB_SHARE_NAME = "MARAN"
 SMB_PATH_WIN = f"\\\\{MAC_HOST}\\{SMB_SHARE_NAME}"      # \\100.122.161.94\MARAN
 SMB_PATH_URL = f"smb://{MAC_HOST}/{SMB_SHARE_NAME}"     # smb://100.122.161.94/MARAN
 SMB_PATH_SHARED = f"{SMB_PATH_WIN}\\shared"             # \\100.122.161.94\MARAN\shared
+SMB_PATH_OUTBOX = f"{SMB_PATH_WIN}\\outbox"             # \\100.122.161.94\MARAN\outbox
+
+# === DELIVERY (Mac→Windows 결과물 전달) ===
+OUTBOX_INDEX_REMOTE = "~/MARAN/outbox/_index.json"
+DELIVERY_POLL_MS = 30_000     # 30초마다 ssh로 _index 갱신
+DELIVERY_SHOW_COUNT = 5       # UI에 보여줄 최근 항목 수
 
 # === 사무실 모드 (Pixel Agents) ===
 PIXEL_AGENTS_EXT_ID = "pablodelucca.pixel-agents"
@@ -562,6 +568,74 @@ def open_smb_folder(log_fn=None):
 def open_smb_shared(log_fn=None):
     """\\\\100.122.161.94\\MARAN\\shared 만 열기 (NAS 작업 폴더)."""
     return _open_smb_path(SMB_PATH_SHARED, log_fn)
+
+
+def open_smb_outbox(log_fn=None):
+    """\\\\100.122.161.94\\MARAN\\outbox 만 열기 (Mac→Windows 결과물)."""
+    return _open_smb_path(SMB_PATH_OUTBOX, log_fn)
+
+
+def smb_path_for_outbox_rel(rel_path):
+    """rel_path('테스트프로젝트/2026-..._foo.pdf') → SMB Windows 경로."""
+    win_rel = rel_path.replace("/", "\\")
+    return f"{SMB_PATH_OUTBOX}\\{win_rel}"
+
+
+def open_explorer_select(file_path):
+    """탐색기에서 그 파일이 선택된 상태로 폴더 열기. Windows /select 옵션."""
+    if os.name != "nt":
+        return False
+    try:
+        # /select, 다음 인자에 공백 없이 파일경로
+        subprocess.Popen(
+            ["explorer.exe", f"/select,{file_path}"],
+            creationflags=CREATE_NO_WINDOW,
+        )
+        return True
+    except Exception:
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", "explorer.exe", f"/select,{file_path}"],
+                creationflags=CREATE_NO_WINDOW,
+            )
+            return True
+        except Exception:
+            return False
+
+
+def open_file_default_app(file_path):
+    """파일을 Windows 기본 앱으로 직접 열기."""
+    if os.name != "nt":
+        return False
+    try:
+        os.startfile(file_path)
+        return True
+    except Exception:
+        return False
+
+
+def fetch_outbox_index():
+    """Mac mini의 ~/MARAN/outbox/_index.json을 SSH로 읽어옴.
+    실패하면 빈 리스트. 30초마다 호출."""
+    if not check_ssh_no_password():
+        return []
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             f"{MAC_USER}@{MAC_HOST}",
+             f"cat {OUTBOX_INDEX_REMOTE} 2>/dev/null || echo '[]'"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        import json
+        data = json.loads(r.stdout)
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception:
+        return []
 
 
 def get_smb_address_text():
@@ -1252,6 +1326,49 @@ class MainView:
         self._sep(self.frame)
 
         # ════════════════════════════════════════════════════════
+        # DELIVERY — Mac→Windows 결과물 (outbox 폴링)
+        # ════════════════════════════════════════════════════════
+        delivery_head = tk.Frame(self.frame, bg=COLOR_BG)
+        delivery_head.pack(fill=tk.X, padx=14, pady=(6, 0))
+        tk.Label(
+            delivery_head, text="DELIVERY",
+            font=FONT_HEADER, fg=COLOR_OK, bg=COLOR_BG,
+        ).pack(side=tk.LEFT)
+        self.delivery_count = tk.Label(
+            delivery_head, text="  (0)",
+            font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_BG,
+        )
+        self.delivery_count.pack(side=tk.LEFT)
+        tk.Button(
+            delivery_head, text="[↻ refresh]",
+            font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
+            activebackground=COLOR_BG, activeforeground=COLOR_OK,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._refresh_delivery_now,
+        ).pack(side=tk.RIGHT)
+        tk.Button(
+            delivery_head, text="[📁 outbox]",
+            font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
+            activebackground=COLOR_BG, activeforeground=COLOR_OK,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=lambda: open_smb_outbox(self.log),
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+
+        # 항목 리스트 컨테이너 (재렌더 시 비우고 다시 채움)
+        self.delivery_list = tk.Frame(self.frame, bg=COLOR_BG)
+        self.delivery_list.pack(fill=tk.X, padx=20, pady=(2, 4))
+        # 초기 안내
+        self._delivery_entries = []
+        self._delivery_last_seen_ts = ""
+        self._render_delivery_list()
+
+        # 시작 즉시 1회 fetch + 30초마다 자동 폴링
+        threading.Thread(target=self._poll_delivery_once, daemon=True).start()
+        self._schedule_delivery_poll()
+
+        self._sep(self.frame)
+
+        # ════════════════════════════════════════════════════════
         # TRANSFER — 드롭존 (Ctrl+V 안내, 클립보드 버튼 제거)
         # ════════════════════════════════════════════════════════
         self._section_header(self.frame, "TRANSFER", suffix="  → ~/MARAN/inbox/")
@@ -1397,6 +1514,164 @@ class MainView:
             txt = "● DIRECT" if ok else "● UNREACHABLE"
             color = COLOR_OK if ok else COLOR_ERROR
             self.frame.after(0, lambda: self.conn_state.config(text=txt, fg=color))
+        except Exception:
+            pass
+
+    # ────────────────────────────────────────────────────────────
+    # DELIVERY (Mac→Windows outbox 폴링)
+    # ────────────────────────────────────────────────────────────
+
+    def _schedule_delivery_poll(self):
+        """30초마다 자동 폴링 (after는 메인 스레드에서 동작)."""
+        self.frame.after(DELIVERY_POLL_MS, self._tick_delivery)
+
+    def _tick_delivery(self):
+        threading.Thread(target=self._poll_delivery_once, daemon=True).start()
+        self._schedule_delivery_poll()
+
+    def _poll_delivery_once(self):
+        """백그라운드 스레드: SSH로 _index.json fetch → UI 업데이트."""
+        try:
+            entries = fetch_outbox_index()
+        except Exception:
+            entries = []
+        # UI 업데이트는 메인 스레드에서
+        self.frame.after(0, lambda: self._apply_delivery_entries(entries))
+
+    def _apply_delivery_entries(self, entries):
+        """fetch 결과 반영 + 새 항목 감지 → footer NEW 강조."""
+        prev_top = self._delivery_entries[0]["ts"] if self._delivery_entries else ""
+        self._delivery_entries = sorted(
+            entries, key=lambda e: e.get("ts", ""), reverse=True,
+        )
+        # 새 항목 도착 검출
+        new_top = self._delivery_entries[0]["ts"] if self._delivery_entries else ""
+        if new_top and new_top != prev_top:
+            # 새 도착이고 이전에 본 적 없으면 NEW 깜박
+            if new_top != self._delivery_last_seen_ts:
+                self._signal_new_delivery(self._delivery_entries[0])
+        self._render_delivery_list()
+
+    def _refresh_delivery_now(self):
+        """수동 [↻ refresh] 클릭."""
+        self.log("▸ refreshing delivery index...")
+        threading.Thread(target=self._poll_delivery_once, daemon=True).start()
+
+    def _render_delivery_list(self):
+        """delivery_list 컨테이너 비우고 최근 N개 다시 그림."""
+        try:
+            for child in self.delivery_list.winfo_children():
+                child.destroy()
+        except Exception:
+            return
+
+        entries = self._delivery_entries[:DELIVERY_SHOW_COUNT]
+        self.delivery_count.config(text=f"  ({len(self._delivery_entries)})")
+
+        if not entries:
+            tk.Label(
+                self.delivery_list,
+                text=":: empty :: run `python scripts/maran_deliver.py <file> [project]`",
+                font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
+                anchor="w",
+            ).pack(fill=tk.X)
+            return
+
+        for entry in entries:
+            is_new = entry["ts"] > self._delivery_last_seen_ts
+            self._build_delivery_row(self.delivery_list, entry, is_new)
+
+    def _build_delivery_row(self, parent, entry, is_new):
+        row = tk.Frame(parent, bg=COLOR_BG)
+        row.pack(fill=tk.X, pady=1)
+
+        # NEW 마커
+        marker = "●" if is_new else " "
+        marker_color = COLOR_ERROR if is_new else COLOR_DIM2
+        tk.Label(
+            row, text=marker,
+            font=FONT_MONO_BOLD, fg=marker_color, bg=COLOR_BG, width=2,
+        ).pack(side=tk.LEFT)
+
+        # 시간 HH:MM
+        ts = entry.get("ts", "")
+        time_str = ts[11:16] if len(ts) >= 16 else ts[-5:]
+        tk.Label(
+            row, text=time_str,
+            font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG, width=6, anchor="w",
+        ).pack(side=tk.LEFT)
+
+        # 파일명 (truncate)
+        fname = entry.get("filename", "")
+        # 앞 timestamp prefix(2026-...) 제거하고 짧게
+        if "_" in fname:
+            parts = fname.split("_", 2)
+            if len(parts) >= 3:
+                short_fname = parts[2]
+            else:
+                short_fname = fname
+        else:
+            short_fname = fname
+        if len(short_fname) > 28:
+            short_fname = short_fname[:27] + "…"
+
+        tk.Label(
+            row, text=short_fname,
+            font=FONT_MONO, fg=COLOR_FG, bg=COLOR_BG, anchor="w",
+        ).pack(side=tk.LEFT, padx=(2, 6))
+
+        # 우측: 프로젝트명 + 열기 버튼
+        smb = smb_path_for_outbox_rel(entry.get("rel_path", ""))
+
+        tk.Button(
+            row, text="[📁]",
+            font=FONT_MONO_TINY, fg=COLOR_OK, bg=COLOR_BG,
+            activebackground=COLOR_PANEL2, activeforeground=COLOR_OK,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=lambda p=smb: self._on_delivery_click(p, entry),
+            padx=4,
+        ).pack(side=tk.RIGHT)
+
+        proj = entry.get("project", "")[:14]
+        tk.Label(
+            row, text=proj,
+            font=FONT_MONO_TINY, fg=COLOR_INFO, bg=COLOR_BG, anchor="e",
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+
+    def _on_delivery_click(self, smb_path, entry):
+        """[📁] 클릭: 탐색기에서 파일 위치 열기 + NEW 마커 해제."""
+        if open_explorer_select(smb_path):
+            self.log(f"▸ opened: {Path(smb_path).name}")
+        else:
+            # Windows 외 환경 또는 실패: 폴더만 열기
+            open_smb_outbox(self.log)
+        # 본 것으로 처리
+        self._delivery_last_seen_ts = self._delivery_entries[0]["ts"] if self._delivery_entries else ""
+        self._render_delivery_list()
+        # footer NEW 강조 해제
+        try:
+            self.foot_update.config(text=" ↻ check update ", fg=COLOR_DIM)
+            # 단, 진짜 새 버전이 있으면 update banner가 다시 띄움 (다음 폴링 시)
+        except Exception:
+            pass
+
+    def _signal_new_delivery(self, entry):
+        """새 결과물 도착 알림: footer 깜박 + log."""
+        try:
+            short = entry.get("filename", "")[:30]
+            proj = entry.get("project", "")
+            self.log(f"[NEW] {short} @ {proj}")
+            # footer 우측 임시로 NEW 강조 (업데이트 알림과 우선순위 충돌 시 update가 이김)
+            self.foot_update.config(
+                text=f" [NEW] delivery ",
+                fg=COLOR_ERROR,
+            )
+            def _flash(times=4, on=True):
+                if times <= 0:
+                    return
+                self.foot_update.config(fg=COLOR_ERROR if on else COLOR_WARN)
+                self.frame.after(280, lambda: _flash(times - 1, not on))
+            _flash()
         except Exception:
             pass
 
@@ -1795,11 +2070,9 @@ class MaranLauncher:
 
     def show_main(self):
         self.setup_view.pack_forget()
-        # v2.0: 모노스페이스 + 정보 밀도 → 좀 좁고 길게
-        self.root.geometry(self._center(560, 700))
-        # 사용자가 창 크기 조절 가능
+        # v2.1: DELIVERY 섹션 추가로 좀 더 길게
+        self.root.geometry(self._center(580, 800))
         self.root.resizable(True, True)
-        # 윈도우 배경 + 타이틀바 톤 통일 (Tk 한계로 타이틀바는 OS 기본)
         self.root.configure(bg=COLOR_BG)
         self.main_view.pack(fill=tk.BOTH, expand=True)
 
