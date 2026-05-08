@@ -27,7 +27,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "1.2.0"  # release 태그와 일치시킬 것 (v1.2.0)
+__version__ = "1.3.0"  # release 태그와 일치시킬 것 (v1.3.0)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -35,11 +35,13 @@ INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
 # === 파일 드롭존 ===
 INBOX_REMOTE_DIR = "~/MARAN/inbox"
 OUTBOX_REMOTE_DIR = "~/MARAN/outbox"  # Mac→Windows 방향 (Claude가 올리는 곳)
+SHARED_REMOTE_DIR = "~/MARAN/shared"  # NAS 작업 폴더 (사용자가 직접 들락날락)
 
 # === NAS (SMB 공유) ===
 SMB_SHARE_NAME = "MARAN"
 SMB_PATH_WIN = f"\\\\{MAC_HOST}\\{SMB_SHARE_NAME}"      # \\100.122.161.94\MARAN
 SMB_PATH_URL = f"smb://{MAC_HOST}/{SMB_SHARE_NAME}"     # smb://100.122.161.94/MARAN
+SMB_PATH_SHARED = f"{SMB_PATH_WIN}\\shared"             # \\100.122.161.94\MARAN\shared
 
 # === 사무실 모드 (Pixel Agents) ===
 PIXEL_AGENTS_EXT_ID = "pablodelucca.pixel-agents"
@@ -512,26 +514,34 @@ def install_pixel_agents_extension(log_fn):
             return False, f"VS Code 실행 실패: {e}"
 
 
-def open_smb_folder(log_fn=None):
-    """탐색기에서 \\\\100.122.161.94\\MARAN 자동으로 열기.
-    첫 접근이면 Windows가 자격증명 묻는 창 띄움."""
+def _open_smb_path(path, log_fn=None):
+    """공통: Windows 탐색기로 SMB 경로 열기."""
     if os.name != "nt":
         return False, "Windows 전용 (Mac에선 Finder → Cmd+K → smb://100.122.161.94)"
     try:
-        os.startfile(SMB_PATH_WIN)
+        os.startfile(path)
         if log_fn:
-            log_fn(f"탐색기에서 {SMB_PATH_WIN} 열림")
-        return True, f"탐색기 열림: {SMB_PATH_WIN}"
+            log_fn(f"탐색기에서 {path} 열림")
+        return True, f"탐색기 열림: {path}"
     except Exception as e:
-        # 폴백: cmd start
         try:
             subprocess.Popen(
-                ["cmd", "/c", "start", "", SMB_PATH_WIN],
+                ["cmd", "/c", "start", "", path],
                 creationflags=CREATE_NO_WINDOW,
             )
             return True, "탐색기 열림 (cmd 폴백)"
         except Exception as e2:
             return False, f"실패: {e} / {e2}"
+
+
+def open_smb_folder(log_fn=None):
+    """\\\\100.122.161.94\\MARAN 전체 열기."""
+    return _open_smb_path(SMB_PATH_WIN, log_fn)
+
+
+def open_smb_shared(log_fn=None):
+    """\\\\100.122.161.94\\MARAN\\shared 만 열기 (NAS 작업 폴더)."""
+    return _open_smb_path(SMB_PATH_SHARED, log_fn)
 
 
 def get_smb_address_text():
@@ -558,12 +568,12 @@ def trigger_self_update(log_fn=None):
 
 
 def ensure_inbox_dir():
-    """Mac mini에 ~/MARAN/inbox/ + ~/MARAN/outbox/ 폴더 보장. 한번만 호출하면 충분."""
+    """Mac mini에 ~/MARAN/inbox/ + ~/MARAN/outbox/ + ~/MARAN/shared/ 폴더 보장."""
     try:
         subprocess.run(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
              f"{MAC_USER}@{MAC_HOST}",
-             f"mkdir -p {INBOX_REMOTE_DIR} {OUTBOX_REMOTE_DIR}"],
+             f"mkdir -p {INBOX_REMOTE_DIR} {OUTBOX_REMOTE_DIR} {SHARED_REMOTE_DIR}"],
             capture_output=True, timeout=10,
             creationflags=CREATE_NO_WINDOW,
         )
@@ -1182,7 +1192,17 @@ class MainView:
         ).pack(side=tk.LEFT, padx=(0, 6))
 
         tk.Button(
-            nas_bar, text="📁 폴더 열기",
+            nas_bar, text="🗂 공유폴더",
+            font=("맑은 고딕", 9, "bold"),
+            bg=COLOR_BTN_INSTALL, fg="#1e1e2e",
+            activebackground=COLOR_BTN_INSTALL_HOVER,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._open_smb_shared,
+            padx=8, pady=2,
+        ).pack(side=tk.LEFT, padx=2)
+
+        tk.Button(
+            nas_bar, text="📁 MARAN 전체",
             font=("맑은 고딕", 9),
             bg=COLOR_BTN_NEUTRAL, fg=COLOR_FG,
             activebackground=COLOR_BTN_NEUTRAL_HOVER,
@@ -1200,12 +1220,6 @@ class MainView:
             command=self._copy_smb_address,
             padx=8, pady=2,
         ).pack(side=tk.LEFT, padx=2)
-
-        tk.Label(
-            nas_bar, text=SMB_PATH_WIN,
-            font=("Consolas", 8),
-            fg=COLOR_DIM, bg=COLOR_BG,
-        ).pack(side=tk.LEFT, padx=(8, 0))
 
         # === 큰 파일 전송 영역 (최하단, 확실히 보이게) ===
         drop_outer = tk.Frame(
@@ -1388,6 +1402,13 @@ class MainView:
         else:
             self.log(f"📂 {msg}")
             self.log("   (첫 접근시 자격증명 창: moran / Mac 비번)")
+
+    def _open_smb_shared(self):
+        ok, msg = open_smb_shared(self.log)
+        if not ok:
+            self.log(f"❌ 공유폴더 열기 실패: {msg}")
+        else:
+            self.log(f"🗂 공유폴더 열림 (~/MARAN/shared/)")
 
     def _copy_smb_address(self):
         addr = get_smb_address_text()
