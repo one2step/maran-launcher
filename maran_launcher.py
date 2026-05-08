@@ -27,7 +27,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "1.3.0"  # release 태그와 일치시킬 것 (v1.3.0)
+__version__ = "2.0.0"  # release 태그와 일치시킬 것 (v2.0.0)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -60,23 +60,43 @@ try:
 except Exception:
     HAS_PIL = False
 
-# === 색상 (Catppuccin Mocha) ===
-COLOR_BG = "#1e1e2e"
-COLOR_PANEL = "#181825"
-COLOR_FG = "#cdd6f4"
-COLOR_DIM = "#6c7086"
-COLOR_OK = "#a6e3a1"
-COLOR_WARN = "#f9e2af"
-COLOR_ERROR = "#f38ba8"
-COLOR_PROGRESS = "#f9e2af"
-COLOR_BTN_VSCODE = "#89b4fa"
-COLOR_BTN_VSCODE_HOVER = "#b4befe"
-COLOR_BTN_TERM = "#a6e3a1"
-COLOR_BTN_TERM_HOVER = "#c6f0bd"
-COLOR_BTN_INSTALL = "#fab387"
-COLOR_BTN_INSTALL_HOVER = "#ffc4a0"
-COLOR_BTN_NEUTRAL = "#45475a"
-COLOR_BTN_NEUTRAL_HOVER = "#585b70"
+# === 색상 (v2.0 Hacker — Mr.Robot/lazygit 톤) ===
+COLOR_BG = "#0a0a0a"          # 거의 검정
+COLOR_PANEL = "#131313"        # 패널 (한 톤 밝게)
+COLOR_PANEL2 = "#1a1a1a"       # 더 밝은 패널
+COLOR_BORDER = "#2a2a2a"       # 박스 테두리
+COLOR_FG = "#c9d1d9"           # 메인 텍스트
+COLOR_DIM = "#4a5263"          # 부차 텍스트
+COLOR_DIM2 = "#6a737d"         # 더 옅은 부차
+COLOR_OK = "#00ff9c"           # 동작/성공 (네온 그린)
+COLOR_WARN = "#ffb800"         # 경고/주의 (앰버)
+COLOR_ERROR = "#ff5555"        # 오류 (빨강)
+COLOR_INFO = "#5fafff"         # 정보 (사이안)
+COLOR_PROGRESS = "#ffb800"
+
+# 모드별 액센트 색 (버튼 텍스트만 색깔, 배경은 패널 톤)
+COLOR_ACCENT_VSCODE = "#5fafff"   # 사이안
+COLOR_ACCENT_OFFICE = "#ffb800"   # 앰버
+COLOR_ACCENT_TERM = "#00ff9c"     # 네온 그린
+
+# 호환성 (기존 코드 이름 유지 — 차후 정리)
+COLOR_BTN_VSCODE = COLOR_PANEL2
+COLOR_BTN_VSCODE_HOVER = COLOR_BORDER
+COLOR_BTN_TERM = COLOR_PANEL2
+COLOR_BTN_TERM_HOVER = COLOR_BORDER
+COLOR_BTN_INSTALL = COLOR_PANEL2
+COLOR_BTN_INSTALL_HOVER = COLOR_BORDER
+COLOR_BTN_NEUTRAL = COLOR_PANEL2
+COLOR_BTN_NEUTRAL_HOVER = COLOR_BORDER
+
+# === 폰트 (모노스페이스, Cascadia Mono → Consolas → 시스템 폴백) ===
+# Tk는 첫 번째 폰트 없으면 자동 폴백
+FONT_MONO = ("Cascadia Mono", 10)
+FONT_MONO_BOLD = ("Cascadia Mono", 10, "bold")
+FONT_MONO_BIG = ("Cascadia Mono", 12, "bold")
+FONT_MONO_TINY = ("Cascadia Mono", 8)
+FONT_TITLE = ("Cascadia Mono", 13, "bold")
+FONT_HEADER = ("Cascadia Mono", 9, "bold")
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 CREATE_NEW_CONSOLE = 0x00000010 if os.name == "nt" else 0
@@ -757,7 +777,7 @@ Read-Host 'Press Enter to close'
 # ============================================================
 
 class StatusRow:
-    """Main view용: 진행 상태 ○/◐/●/✗"""
+    """레거시: 진행 상태 ○/◐/●/✗ (SetupView에서만 사용)"""
 
     def __init__(self, parent, label_text):
         self.frame = tk.Frame(parent, bg=COLOR_BG)
@@ -777,6 +797,56 @@ class StatusRow:
     def progress(self): self.icon.config(text="◐", fg=COLOR_PROGRESS)
     def ok(self): self.icon.config(text="●", fg=COLOR_OK)
     def error(self): self.icon.config(text="✗", fg=COLOR_ERROR)
+
+
+class HackerStatusRow:
+    """v2.0 모노스페이스 한 줄: '▸ tailscale ........... ● ACTIVE'"""
+
+    LABEL_W = 18  # name 영역 폭 (도트 패딩 포함)
+
+    def __init__(self, parent, name):
+        self.name = name
+        self.frame = tk.Frame(parent, bg=COLOR_BG)
+
+        # 좌측: ▸ name ........
+        dots = "." * max(0, self.LABEL_W - len(name))
+        self.left = tk.Label(
+            self.frame,
+            text=f"  ▸ {name} {dots}",
+            font=FONT_MONO, fg=COLOR_DIM2, bg=COLOR_BG,
+            anchor="w",
+        )
+        self.left.pack(side=tk.LEFT)
+
+        # 우측: ● STATUS
+        self.icon = tk.Label(
+            self.frame, text="●",
+            font=FONT_MONO_BOLD, fg=COLOR_DIM, bg=COLOR_BG,
+        )
+        self.icon.pack(side=tk.LEFT, padx=(2, 4))
+
+        self.status_text = tk.Label(
+            self.frame, text="STANDBY",
+            font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
+        )
+        self.status_text.pack(side=tk.LEFT)
+
+        # 호환용 alias (기존 코드가 self.s_run.label 식 참조)
+        self.label = self.left
+
+    def pack(self, **kw): self.frame.pack(**kw)
+    def pending(self):
+        self.icon.config(fg=COLOR_DIM)
+        self.status_text.config(text="STANDBY", fg=COLOR_DIM)
+    def progress(self):
+        self.icon.config(fg=COLOR_WARN)
+        self.status_text.config(text="WORKING", fg=COLOR_WARN)
+    def ok(self):
+        self.icon.config(fg=COLOR_OK)
+        self.status_text.config(text="ACTIVE", fg=COLOR_OK)
+    def error(self):
+        self.icon.config(fg=COLOR_ERROR)
+        self.status_text.config(text="ERROR", fg=COLOR_ERROR)
 
 
 class PrereqRow:
@@ -1057,231 +1127,278 @@ class MainView:
         self._auto_pending = mode
 
     def _build(self):
-        # === 업데이트 배너 (조건부 표시) ===
-        self.update_bar = tk.Frame(self.frame, bg=COLOR_WARN)
-        self.update_label = tk.Label(
-            self.update_bar, text="",
-            font=("맑은 고딕", 9, "bold"),
-            fg="#1e1e2e", bg=COLOR_WARN,
-            padx=10, pady=4,
-        )
-        self.update_label.pack(side=tk.LEFT)
-        self.update_btn = tk.Button(
-            self.update_bar, text="업데이트",
-            font=("맑은 고딕", 9, "bold"),
-            bg="#1e1e2e", fg=COLOR_WARN,
-            activebackground=COLOR_PANEL,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=self._do_update,
-            padx=10, pady=2,
-        )
-        self.update_btn.pack(side=tk.RIGHT, padx=6, pady=2)
-        # 기본은 숨김 (업데이트 있으면 _check_update_async가 띄움)
+        # ════════════════════════════════════════════════════════
+        # HEADER — MARAN.LAUNCH v1.x.y / TARGET / setup btn
+        # ════════════════════════════════════════════════════════
+        header = tk.Frame(self.frame, bg=COLOR_BG)
+        header.pack(fill=tk.X, padx=14, pady=(10, 0))
 
-        # === 우측 상단 설정 버튼 + 버전 ===
-        top = tk.Frame(self.frame, bg=COLOR_BG)
-        top.pack(fill=tk.X, padx=8, pady=(8, 0))
+        title_left = tk.Frame(header, bg=COLOR_BG)
+        title_left.pack(side=tk.LEFT)
+        tk.Label(
+            title_left, text="MARAN.LAUNCH",
+            font=FONT_TITLE, fg=COLOR_OK, bg=COLOR_BG,
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            title_left, text=f"  v{__version__}",
+            font=FONT_MONO, fg=COLOR_DIM2, bg=COLOR_BG,
+        ).pack(side=tk.LEFT, padx=(2, 0))
+
         tk.Button(
-            top, text="⚙", font=("Segoe UI Symbol", 12),
-            bg=COLOR_BG, fg=COLOR_DIM,
-            activebackground=COLOR_BG, activeforeground=COLOR_FG,
+            header, text="[⚙ setup]",
+            font=FONT_MONO, fg=COLOR_DIM, bg=COLOR_BG,
+            activebackground=COLOR_BG, activeforeground=COLOR_OK,
             relief=tk.FLAT, bd=0, cursor="hand2",
             command=self.on_setup if self.on_setup else lambda: None,
-            padx=6,
         ).pack(side=tk.RIGHT)
+
+        # TARGET line
+        target_bar = tk.Frame(self.frame, bg=COLOR_BG)
+        target_bar.pack(fill=tk.X, padx=14, pady=(2, 8))
         tk.Label(
-            top, text=f"v{__version__}", font=("맑은 고딕", 8),
-            fg=COLOR_DIM, bg=COLOR_BG,
-        ).pack(side=tk.LEFT, padx=4)
-
-        tk.Label(
-            self.frame, text="🚀 마란 런처",
-            font=("맑은 고딕", 18, "bold"),
-            fg=COLOR_FG, bg=COLOR_BG,
-        ).pack(pady=(2, 4))
-
-        tk.Label(
-            self.frame, text="맥미니에 어떻게 접속할까요?",
-            font=("맑은 고딕", 9),
-            fg=COLOR_DIM, bg=COLOR_BG,
-        ).pack(pady=(0, 14))
-
-        btns = tk.Frame(self.frame, bg=COLOR_BG)
-        btns.pack(pady=(0, 14))
-
-        self.btn_vscode = tk.Button(
-            btns, text="🖥  VS Code", width=12,
-            font=("맑은 고딕", 10, "bold"),
-            bg=COLOR_BTN_VSCODE, fg="#1e1e2e",
-            activebackground=COLOR_BTN_VSCODE_HOVER,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=lambda: self.start("vscode"),
-            padx=8, pady=8,
+            target_bar, text=f"TARGET: {MAC_USER}@{MAC_HOST}",
+            font=FONT_MONO, fg=COLOR_DIM2, bg=COLOR_BG,
+        ).pack(side=tk.LEFT)
+        self.conn_state = tk.Label(
+            target_bar, text="● CHECKING",
+            font=FONT_MONO_BOLD, fg=COLOR_DIM, bg=COLOR_BG,
         )
-        self.btn_vscode.pack(side=tk.LEFT, padx=4)
+        self.conn_state.pack(side=tk.RIGHT)
 
-        self.btn_office = tk.Button(
-            btns, text="🏢  사무실", width=12,
-            font=("맑은 고딕", 10, "bold"),
-            bg=COLOR_BTN_INSTALL, fg="#1e1e2e",
-            activebackground=COLOR_BTN_INSTALL_HOVER,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=lambda: self.start("office"),
-            padx=8, pady=8,
+        # 구분선
+        self._sep(self.frame)
+
+        # ════════════════════════════════════════════════════════
+        # STATUS — Tailscale / SSH / Pixel Agents 라이브 상태
+        # ════════════════════════════════════════════════════════
+        self._section_header(self.frame, "STATUS")
+        status_box = tk.Frame(self.frame, bg=COLOR_BG)
+        status_box.pack(fill=tk.X, padx=20, pady=(2, 4))
+        self.s_tail = HackerStatusRow(status_box, "tailscale")
+        self.s_tail.pack(fill=tk.X, pady=1)
+        self.s_mac = HackerStatusRow(status_box, "ssh-agent")
+        self.s_mac.pack(fill=tk.X, pady=1)
+        self.s_run = HackerStatusRow(status_box, "pixel-agents")
+        self.s_run.pack(fill=tk.X, pady=1)
+
+        self._sep(self.frame)
+
+        # ════════════════════════════════════════════════════════
+        # EXEC — 모드 선택 버튼 3개
+        # ════════════════════════════════════════════════════════
+        self._section_header(self.frame, "EXEC")
+        exec_box = tk.Frame(self.frame, bg=COLOR_BG)
+        exec_box.pack(fill=tk.X, padx=20, pady=(2, 6))
+
+        self.btn_vscode = self._hack_btn(
+            exec_box, "▸ vscode", COLOR_ACCENT_VSCODE,
+            lambda: self.start("vscode"),
         )
-        self.btn_office.pack(side=tk.LEFT, padx=4)
+        self.btn_vscode.pack(side=tk.LEFT, padx=(0, 6))
 
-        self.btn_term = tk.Button(
-            btns, text="💻  Terminal", width=12,
-            font=("맑은 고딕", 10, "bold"),
-            bg=COLOR_BTN_TERM, fg="#1e1e2e",
-            activebackground=COLOR_BTN_TERM_HOVER,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=lambda: self.start("terminal"),
-            padx=8, pady=8,
+        self.btn_office = self._hack_btn(
+            exec_box, "▸ office", COLOR_ACCENT_OFFICE,
+            lambda: self.start("office"),
         )
-        self.btn_term.pack(side=tk.LEFT, padx=4)
+        self.btn_office.pack(side=tk.LEFT, padx=6)
 
-        rows = tk.Frame(self.frame, bg=COLOR_BG)
-        rows.pack(fill=tk.X, padx=60)
-        self.s_tail = StatusRow(rows, "Tailscale 연결")
-        self.s_tail.pack(fill=tk.X, pady=3)
-        self.s_mac = StatusRow(rows, "맥미니 응답")
-        self.s_mac.pack(fill=tk.X, pady=3)
-        self.s_run = StatusRow(rows, "실행")
-        self.s_run.pack(fill=tk.X, pady=3)
+        self.btn_term = self._hack_btn(
+            exec_box, "▸ shell", COLOR_ACCENT_TERM,
+            lambda: self.start("terminal"),
+        )
+        self.btn_term.pack(side=tk.LEFT, padx=6)
 
-        self.log_var = tk.StringVar(value="원하는 모드를 선택하세요.")
-        tk.Label(
-            self.frame, textvariable=self.log_var,
-            font=("맑은 고딕", 9), fg=COLOR_DIM, bg=COLOR_BG,
-            wraplength=400, justify=tk.CENTER,
-        ).pack(pady=(12, 6), padx=20)
-
+        # 옵션 (작게)
         opts = tk.Frame(self.frame, bg=COLOR_BG)
-        opts.pack(pady=(0, 8))
-
+        opts.pack(fill=tk.X, padx=20, pady=(2, 4))
         self.auto_close = tk.BooleanVar(value=True)
         tk.Checkbutton(
-            opts, text="완료 후 자동 닫기",
+            opts, text="auto-close",
             variable=self.auto_close,
-            font=("맑은 고딕", 9),
+            font=FONT_MONO_TINY,
             fg=COLOR_DIM, bg=COLOR_BG,
-            selectcolor=COLOR_BG,
+            selectcolor=COLOR_PANEL2,
             activebackground=COLOR_BG, activeforeground=COLOR_FG, bd=0,
-        ).pack(side=tk.LEFT, padx=8)
-
+        ).pack(side=tk.LEFT)
         self.auto_claude = tk.BooleanVar(value=True)
         tk.Checkbutton(
-            opts, text="Terminal: 자동 claude 실행",
+            opts, text="shell→claude",
             variable=self.auto_claude,
-            font=("맑은 고딕", 9),
+            font=FONT_MONO_TINY,
             fg=COLOR_DIM, bg=COLOR_BG,
-            selectcolor=COLOR_BG,
+            selectcolor=COLOR_PANEL2,
             activebackground=COLOR_BG, activeforeground=COLOR_FG, bd=0,
-        ).pack(side=tk.LEFT, padx=8)
+        ).pack(side=tk.LEFT, padx=(8, 0))
 
-        # === NAS 빠른 액션 (1줄) ===
-        nas_bar = tk.Frame(self.frame, bg=COLOR_BG)
-        nas_bar.pack(fill=tk.X, padx=20, pady=(6, 2))
+        self._sep(self.frame)
 
-        tk.Label(
-            nas_bar, text="📂 NAS",
-            font=("맑은 고딕", 9, "bold"),
-            fg=COLOR_FG, bg=COLOR_BG,
+        # ════════════════════════════════════════════════════════
+        # NAS — 공유폴더 / MARAN / 주소복사
+        # ════════════════════════════════════════════════════════
+        self._section_header(self.frame, "NAS", suffix=f"  {SMB_PATH_URL}")
+        nas_box = tk.Frame(self.frame, bg=COLOR_BG)
+        nas_box.pack(fill=tk.X, padx=20, pady=(2, 6))
+
+        self._hack_btn(
+            nas_box, "▸ shared", COLOR_OK, self._open_smb_shared,
         ).pack(side=tk.LEFT, padx=(0, 6))
+        self._hack_btn(
+            nas_box, "▸ root", COLOR_INFO, self._open_smb_folder,
+        ).pack(side=tk.LEFT, padx=6)
+        self._hack_btn(
+            nas_box, "⌘ copy addr", COLOR_DIM2, self._copy_smb_address,
+        ).pack(side=tk.LEFT, padx=6)
 
-        tk.Button(
-            nas_bar, text="🗂 공유폴더",
-            font=("맑은 고딕", 9, "bold"),
-            bg=COLOR_BTN_INSTALL, fg="#1e1e2e",
-            activebackground=COLOR_BTN_INSTALL_HOVER,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=self._open_smb_shared,
-            padx=8, pady=2,
-        ).pack(side=tk.LEFT, padx=2)
+        self._sep(self.frame)
 
-        tk.Button(
-            nas_bar, text="📁 MARAN 전체",
-            font=("맑은 고딕", 9),
-            bg=COLOR_BTN_NEUTRAL, fg=COLOR_FG,
-            activebackground=COLOR_BTN_NEUTRAL_HOVER,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=self._open_smb_folder,
-            padx=8, pady=2,
-        ).pack(side=tk.LEFT, padx=2)
+        # ════════════════════════════════════════════════════════
+        # TRANSFER — 드롭존 (Ctrl+V 안내, 클립보드 버튼 제거)
+        # ════════════════════════════════════════════════════════
+        self._section_header(self.frame, "TRANSFER", suffix="  → ~/MARAN/inbox/")
 
-        tk.Button(
-            nas_bar, text="📋 주소 복사",
-            font=("맑은 고딕", 9),
-            bg=COLOR_BTN_NEUTRAL, fg=COLOR_FG,
-            activebackground=COLOR_BTN_NEUTRAL_HOVER,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=self._copy_smb_address,
-            padx=8, pady=2,
-        ).pack(side=tk.LEFT, padx=2)
-
-        # === 큰 파일 전송 영역 (최하단, 확실히 보이게) ===
         drop_outer = tk.Frame(
             self.frame, bg=COLOR_PANEL,
-            highlightbackground=COLOR_DIM, highlightthickness=1,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
         )
-        drop_outer.pack(fill=tk.BOTH, expand=True, padx=20, pady=(6, 14))
+        drop_outer.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 6))
+
+        # 가운데 정렬 위해 spacer
+        tk.Frame(drop_outer, bg=COLOR_PANEL).pack(expand=True)
 
         self.drop_title = tk.Label(
-            drop_outer, text="📥  파일 전송 → ~/MARAN/inbox/",
-            font=("맑은 고딕", 11, "bold"),
-            fg=COLOR_FG, bg=COLOR_PANEL,
+            drop_outer,
+            text=":: drag files / press Ctrl+V to paste ::",
+            font=FONT_MONO, fg=COLOR_DIM2, bg=COLOR_PANEL,
         )
-        self.drop_title.pack(pady=(14, 4))
+        self.drop_title.pack(pady=(0, 8))
 
-        hint_text = (
-            "여기로 파일 드래그하거나 아래 버튼" if HAS_WINDND
-            else "아래 버튼으로 파일/클립보드 전송"
-        )
-        tk.Label(
-            drop_outer, text=hint_text,
-            font=("맑은 고딕", 9),
-            fg=COLOR_DIM, bg=COLOR_PANEL,
-        ).pack(pady=(0, 12))
-
-        drop_btns = tk.Frame(drop_outer, bg=COLOR_PANEL)
-        drop_btns.pack(pady=(0, 16))
-
+        # 큰 파일 선택 버튼 (가운데)
         tk.Button(
-            drop_btns, text="📁 파일 업로드",
-            font=("맑은 고딕", 10, "bold"),
-            bg=COLOR_BTN_VSCODE, fg="#1e1e2e",
-            activebackground=COLOR_BTN_VSCODE_HOVER,
+            drop_outer, text="[ + select file ]",
+            font=FONT_MONO_BOLD, fg=COLOR_OK, bg=COLOR_PANEL,
+            activebackground=COLOR_PANEL2, activeforeground=COLOR_OK,
             relief=tk.FLAT, bd=0, cursor="hand2",
             command=self._pick_file_to_upload,
-            padx=14, pady=6, width=12,
-        ).pack(side=tk.LEFT, padx=6)
+            padx=10, pady=4,
+        ).pack()
 
-        tk.Button(
-            drop_btns, text="📋 클립보드",
-            font=("맑은 고딕", 10, "bold"),
-            bg=COLOR_BTN_TERM, fg="#1e1e2e",
-            activebackground=COLOR_BTN_TERM_HOVER,
-            relief=tk.FLAT, bd=0, cursor="hand2",
-            command=self._handle_paste,
-            padx=14, pady=6, width=12,
-        ).pack(side=tk.LEFT, padx=6)
+        tk.Frame(drop_outer, bg=COLOR_PANEL).pack(expand=True)
 
-        # 결과 피드백용 라벨 (조용히 깜박이는 색)
-        self.drop_zone = drop_outer  # 호환성 (_flash_drop_zone에서 사용)
+        self.drop_zone = drop_outer  # 호환성
 
-        # Ctrl+V 클립보드 paste 바인딩 (frame 전체에서 동작)
+        # Ctrl+V 클립보드 paste — frame 전체
         self.frame.bind_all("<Control-v>", self._handle_paste)
         self.frame.bind_all("<Control-V>", self._handle_paste)
 
-        # windnd 드래그&드롭 — outer frame + 안쪽 라벨/버튼 모두 수신
         if HAS_WINDND:
             try:
                 windnd.hook_dropfiles(drop_outer, func=self._handle_drop)
                 windnd.hook_dropfiles(self.drop_title, func=self._handle_drop)
             except Exception:
                 pass
+
+        # ════════════════════════════════════════════════════════
+        # FOOTER — version / IP / update check (항상 표시)
+        # ════════════════════════════════════════════════════════
+        footer = tk.Frame(
+            self.frame, bg=COLOR_PANEL2,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+        )
+        footer.pack(fill=tk.X, side=tk.BOTTOM, padx=0, pady=0)
+
+        self.foot_version = tk.Label(
+            footer, text=f" v{__version__} ",
+            font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_PANEL2,
+        )
+        self.foot_version.pack(side=tk.LEFT)
+        tk.Label(
+            footer, text="│",
+            font=FONT_MONO_TINY, fg=COLOR_BORDER, bg=COLOR_PANEL2,
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            footer, text=f" {MAC_HOST} ",
+            font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_PANEL2,
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            footer, text="│",
+            font=FONT_MONO_TINY, fg=COLOR_BORDER, bg=COLOR_PANEL2,
+        ).pack(side=tk.LEFT)
+
+        # 우측: 업데이트 표시 (항상 보이게)
+        self.foot_update = tk.Button(
+            footer, text=" ↻ check update ",
+            font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_PANEL2,
+            activebackground=COLOR_BORDER, activeforeground=COLOR_OK,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._do_update,
+            padx=4,
+        )
+        self.foot_update.pack(side=tk.RIGHT)
+
+        # 라이브 로그 줄 (footer 위쪽 작은 줄)
+        self.log_var = tk.StringVar(value=":: ready ::")
+        log_line = tk.Frame(self.frame, bg=COLOR_BG)
+        log_line.pack(fill=tk.X, side=tk.BOTTOM, padx=14, pady=(2, 2))
+        tk.Label(
+            log_line, textvariable=self.log_var,
+            font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
+            anchor="w", justify=tk.LEFT,
+        ).pack(fill=tk.X)
+
+        # 헬퍼: 호환성을 위한 update_bar / update_label / update_btn (배너는 제거됨)
+        # 새 버전 표시는 _show_update_banner에서 foot_update 텍스트만 갱신
+        self.update_bar = None  # legacy
+        self.update_label = None
+        self.update_btn = self.foot_update
+
+        # 시작 시 연결 상태 빠른 체크 (target_bar의 conn_state)
+        threading.Thread(target=self._refresh_conn_state, daemon=True).start()
+
+    # ────────────────────────────────────────────────────────────
+    # UI 헬퍼들
+    # ────────────────────────────────────────────────────────────
+
+    def _sep(self, parent):
+        """가로 구분선 (얇은 회색)."""
+        line = tk.Frame(parent, bg=COLOR_BORDER, height=1)
+        line.pack(fill=tk.X, padx=14, pady=(2, 2))
+
+    def _section_header(self, parent, label, suffix=""):
+        """섹션 헤더: STATUS / EXEC / NAS / TRANSFER 같은 라벨."""
+        bar = tk.Frame(parent, bg=COLOR_BG)
+        bar.pack(fill=tk.X, padx=14, pady=(6, 0))
+        tk.Label(
+            bar, text=label,
+            font=FONT_HEADER, fg=COLOR_OK, bg=COLOR_BG,
+        ).pack(side=tk.LEFT)
+        if suffix:
+            tk.Label(
+                bar, text=suffix,
+                font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_BG,
+            ).pack(side=tk.LEFT)
+
+    def _hack_btn(self, parent, text, accent_color, command):
+        """해커 톤 버튼: 어두운 배경 + 액센트 색 텍스트 + 테두리."""
+        btn = tk.Button(
+            parent, text=text,
+            font=FONT_MONO_BOLD, fg=accent_color, bg=COLOR_PANEL2,
+            activebackground=COLOR_BORDER, activeforeground=accent_color,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+            command=command,
+            padx=10, pady=5,
+        )
+        return btn
+
+    def _refresh_conn_state(self):
+        """target_bar 우측 연결 상태 라벨 갱신."""
+        try:
+            ok = check_mac_reachable()
+            txt = "● DIRECT" if ok else "● UNREACHABLE"
+            color = COLOR_OK if ok else COLOR_ERROR
+            self.frame.after(0, lambda: self.conn_state.config(text=txt, fg=color))
+        except Exception:
+            pass
 
     # ============================================================
     # Auto-update
@@ -1296,10 +1413,22 @@ class MainView:
             self.frame.after(0, lambda: self._show_update_banner(latest))
 
     def _show_update_banner(self, latest_ver):
-        self.update_label.config(
-            text=f"  🆕 새 버전 v{latest_ver} 있음 (현재 v{__version__})"
-        )
-        self.update_bar.pack(fill=tk.X, side=tk.TOP, before=self.frame.winfo_children()[1] if len(self.frame.winfo_children()) > 1 else None)
+        """v2.0+: 노란 배너 대신 footer 우측 라벨을 빨간 강조로 변경."""
+        try:
+            self.foot_update.config(
+                text=f" [!] v{latest_ver} → update ",
+                fg=COLOR_ERROR,
+            )
+            # 짧은 깜박임으로 시선 유도
+            def _flash(times=4, on=True):
+                if times <= 0:
+                    self.foot_update.config(fg=COLOR_ERROR)
+                    return
+                self.foot_update.config(fg=COLOR_ERROR if on else COLOR_WARN)
+                self.frame.after(280, lambda: _flash(times - 1, not on))
+            _flash()
+        except Exception:
+            pass
 
     def _do_update(self):
         ok, msg = trigger_self_update(self.log)
@@ -1666,10 +1795,12 @@ class MaranLauncher:
 
     def show_main(self):
         self.setup_view.pack_forget()
-        # 사무실 버튼 + NAS 액션 + 큰 드롭존 영역으로 세로 더 키움
-        self.root.geometry(self._center(540, 720))
-        # 메인 화면은 사용자가 창 크기 조절 가능 (드롭존 키우려고)
+        # v2.0: 모노스페이스 + 정보 밀도 → 좀 좁고 길게
+        self.root.geometry(self._center(560, 700))
+        # 사용자가 창 크기 조절 가능
         self.root.resizable(True, True)
+        # 윈도우 배경 + 타이틀바 톤 통일 (Tk 한계로 타이틀바는 OS 기본)
+        self.root.configure(bg=COLOR_BG)
         self.main_view.pack(fill=tk.BOTH, expand=True)
 
     def _center(self, w, h):

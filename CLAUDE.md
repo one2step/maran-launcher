@@ -12,6 +12,7 @@ Claude Code가 이 프로젝트에서 작업할 때 필요한 맥락 정보.
 - **파일 드롭존 + Ctrl+V** (v1.1+): 런처 창에 파일 드래그 / 클립보드 이미지·파일 Ctrl+V → scp로 Mac mini `~/MARAN/inbox/` 자동 업로드.
 - **NAS 빠른 액션** (v1.2+): [📁 폴더 열기] 한 번에 Windows 탐색기에서 `\\100.122.161.94\MARAN` 마운트. [📋 주소 복사]로 SMB 주소 클립보드. 큰 드롭존 + [파일 업로드]/[클립보드] 두 버튼 분리 + outbox 폴더 (Mac→Windows 양방향).
 - **공유폴더 (NAS 작업 영역)** (v1.3+): [🗂 공유폴더] 버튼 → `\\100.122.161.94\MARAN\shared` 직접 진입. `~/MARAN/shared/`는 NAS처럼 자유롭게 쓰는 작업 폴더 (코드/메모리와 분리). inbox/outbox는 자동화용, shared는 사용자가 직접 들락날락.
+- **v2.0 해커 톤 전면 리디자인** (v2.0+): Mr.Robot/lazygit 영감. 검정 배경 + 옅은 흰 + 네온그린(동작)/앰버(주의)/사이안(정보) 액센트. Cascadia Mono 폰트. 섹션 헤더 STATUS/EXEC/NAS/TRANSFER로 정보 밀도 높임. 클립보드 버튼 제거 (Ctrl+V 통합). 업데이트는 하단 footer에 항상 표시 (새 버전 있으면 빨간 강조). HackerStatusRow 클래스로 `▸ name ......... ● ACTIVE` 한 줄.
 
 ## Repo / 배포
 
