@@ -201,10 +201,65 @@ def check_ssh_no_password():
 # 모든 함수는 (success: bool, message: str) 튜플 반환
 # ============================================================
 
+def install_winget(log_fn):
+    """winget(App Installer) 자체를 자동 설치 시도. PS + AppX."""
+    log_fn("winget 자동 설치 시도 중...")
+
+    # 1) 이미 설치된 Microsoft.DesktopAppInstaller 재등록
+    try:
+        ps1 = (
+            "Get-AppxPackage Microsoft.DesktopAppInstaller | "
+            "ForEach-Object { Add-AppxPackage -DisableDevelopmentMode "
+            "-Register \"$($_.InstallLocation)\\AppXManifest.xml\" }"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps1],
+            capture_output=True, text=True, timeout=60,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        time.sleep(2)
+        _refresh_path_from_registry()
+        if check_winget_available():
+            return True, "winget 활성화됨 (재등록)"
+    except Exception:
+        pass
+
+    # 2) GitHub releases 에서 latest msixbundle 다운로드 + 설치
+    log_fn("Microsoft.DesktopAppInstaller msixbundle 다운로드 중...")
+    try:
+        ps2 = (
+            "$ErrorActionPreference = 'Stop';"
+            "$asset = (Invoke-RestMethod 'https://api.github.com/repos/microsoft/winget-cli/releases/latest').assets | "
+            "Where-Object { $_.name -like '*.msixbundle' } | Select-Object -First 1;"
+            "$tmp = \"$env:TEMP\\winget-installer.msixbundle\";"
+            "Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -UseBasicParsing;"
+            "Add-AppxPackage -Path $tmp;"
+            "'OK'"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-Command", ps2],
+            capture_output=True, text=True, timeout=300,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        time.sleep(2)
+        _refresh_path_from_registry()
+        if check_winget_available():
+            return True, "winget 설치 완료"
+        return False, ((r.stderr or r.stdout) or "")[:300].strip()
+    except Exception as e:
+        return False, str(e)
+
+
 def winget_install(package_id, log_fn):
+    """winget 으로 패키지 설치. winget 자체가 없으면 자동 설치 후 재시도."""
     if not check_winget_available():
-        return False, "winget 미설치 (Windows 10 1809 이전 버전). 직접 설치 필요."
-    log_fn(f"winget으로 {package_id} 설치 중... (UAC 창 뜨면 '예' 클릭)")
+        log_fn("winget 미설치 → 자동 설치 시도")
+        ok, msg = install_winget(log_fn)
+        if not ok:
+            return False, f"winget 설치 실패: {msg}"
+
+    log_fn(f"winget 으로 {package_id} 설치 중... (UAC 창 뜨면 '예' 클릭)")
     try:
         r = subprocess.run(
             ["winget", "install", "--exact", "--id", package_id,
@@ -225,21 +280,102 @@ def winget_install(package_id, log_fn):
         return False, str(e)
 
 
+def _ps_download(url, out_path, log_fn, timeout=300):
+    """PowerShell 로 파일 다운로드. (tls 1.2 + redirect follow)"""
+    ps = (
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;"
+        f"Invoke-WebRequest -Uri '{url}' -OutFile '{out_path}' -UseBasicParsing"
+    )
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps],
+        capture_output=True, text=True, timeout=timeout,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout)[:200])
+
+
+def install_tailscale_direct(log_fn):
+    """winget 없이 Tailscale 공식 setup.exe 직접 실행."""
+    url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
+    tmp = Path(tempfile.gettempdir()) / "tailscale-setup.exe"
+    log_fn(f"Tailscale 직접 다운로드 중...")
+    try:
+        _ps_download(url, tmp, log_fn, timeout=240)
+    except Exception as e:
+        return False, f"다운로드 실패: {e}"
+    log_fn("설치 마법사 실행. UAC '예' → 화면 따라 [Install].")
+    try:
+        subprocess.Popen([str(tmp)])
+        return True, "설치 마법사 띄움 (수동 진행)"
+    except Exception as e:
+        return False, str(e)
+
+
+def install_vscode_direct(log_fn):
+    """winget 없이 VS Code User installer 직접 실행 (자동 설치)."""
+    url = "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user"
+    tmp = Path(tempfile.gettempdir()) / "vscode-user-setup.exe"
+    log_fn("VS Code User installer 다운로드 중...")
+    try:
+        _ps_download(url, tmp, log_fn, timeout=300)
+    except Exception as e:
+        return False, f"다운로드 실패: {e}"
+
+    log_fn("VS Code 자동 설치 중... (1~2분)")
+    try:
+        r = subprocess.run(
+            [str(tmp), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+             "/MERGETASKS=!runcode,addcontextmenufiles,addcontextmenufolders,"
+             "associatewithfiles,addtopath"],
+            timeout=420, creationflags=CREATE_NO_WINDOW,
+        )
+        _refresh_path_from_registry()
+        if r.returncode == 0:
+            return True, "설치 완료"
+        return False, f"설치 종료 코드 {r.returncode}"
+    except Exception as e:
+        return False, str(e)
+
+
 def install_tailscale(log_fn):
     ok, msg = winget_install("Tailscale.Tailscale", log_fn)
+    if not ok:
+        log_fn(f"winget 경로 실패: {msg}")
+        log_fn("→ 공식 설치 파일 직접 다운로드로 폴백")
+        ok, msg = install_tailscale_direct(log_fn)
     if ok:
-        log_fn("✅ Tailscale 설치 완료. Tailscale 앱에서 로그인이 필요합니다.")
+        log_fn("✅ Tailscale 준비됨. 앱에서 로그인이 필요합니다.")
         time.sleep(1)
         open_tailscale_app(log_fn)
     return ok, msg
 
 
 def install_vscode(log_fn):
-    return winget_install("Microsoft.VisualStudioCode", log_fn)
+    ok, msg = winget_install("Microsoft.VisualStudioCode", log_fn)
+    if not ok:
+        log_fn(f"winget 경로 실패: {msg}")
+        log_fn("→ VS Code 공식 installer 직접 다운로드로 폴백")
+        ok, msg = install_vscode_direct(log_fn)
+    return ok, msg
 
 
 def install_windows_terminal(log_fn):
-    return winget_install("Microsoft.WindowsTerminal", log_fn)
+    ok, msg = winget_install("Microsoft.WindowsTerminal", log_fn)
+    if ok:
+        return ok, msg
+    log_fn(f"winget 경로 실패: {msg}")
+    log_fn("→ Microsoft Store 페이지 열기 (수동 [받기] 클릭)")
+    try:
+        # ms-windows-store URL: 9N0DX20HK701 = Windows Terminal
+        os.startfile("ms-windows-store://pdp/?productid=9N0DX20HK701")
+        return True, "Microsoft Store 열림. [받기] 클릭하세요."
+    except Exception:
+        try:
+            os.startfile("https://aka.ms/terminal")
+            return True, "다운로드 페이지 열림. 수동 설치 후 새로고침."
+        except Exception as e:
+            return False, str(e)
 
 
 def install_remote_ssh_extension(log_fn):
