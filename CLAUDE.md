@@ -7,7 +7,9 @@ Claude Code가 이 프로젝트에서 작업할 때 필요한 맥락 정보.
 **마란 런처 (Maran Launcher)** — Windows에서 `Ctrl+Alt+M` 한 번으로 맥미니 `~/MARAN` 폴더에 SSH로 자동 연결해주는 작은 GUI 런처.
 
 - 형은 윈도우 PC들과 맥미니를 Tailscale로 연결해서, 어느 PC에서든 빠르게 맥미니의 Claude Code 환경에 진입하기 위해 만듦.
-- 두 가지 모드: VS Code Remote-SSH / Terminal SSH (선택적 자동 `claude` 실행).
+- **세 가지 모드** (v1.1+): VS Code Remote-SSH / **사무실 (VS Code + Pixel Agents)** / Terminal SSH.
+- **자동 업데이트** (v1.1+): 시작 시 GitHub release 체크 → 새 버전 있으면 상단 노란 배너 → 클릭 시 install.ps1 자동 재실행.
+- **파일 드롭존 + Ctrl+V** (v1.1+): 런처 창에 파일 드래그 / 클립보드 이미지·파일 Ctrl+V → scp로 Mac mini `~/MARAN/inbox/` 자동 업로드.
 
 ## Repo / 배포
 
@@ -36,7 +38,15 @@ Claude Code가 이 프로젝트에서 작업할 때 필요한 맥락 정보.
 MAC_HOST = "100.122.161.94"      # 맥미니 Tailscale IP
 MAC_USER = "moran"
 MAC_PROJECT_PATH = "/Users/moran/MARAN"
+
+__version__ = "1.1.0"            # release 태그(v1.1.0)와 일치시킬 것
+GITHUB_REPO = "one2step/maran-launcher"
+INBOX_REMOTE_DIR = "~/MARAN/inbox"
+PIXEL_AGENTS_EXT_ID = "pablodelucca.pixel-agents"
 ```
+
+**버전 올릴 때**: `__version__` 상수 수정 → 같은 값으로 git tag (`v1.x.y`) push.
+GitHub Actions가 빌드 → 다음 사용자 런처 시작 시 자동 업데이트 배너 뜸.
 
 ## 아키텍처 메모
 
@@ -106,14 +116,41 @@ git push origin v1.0.1
 - 윈도우 7/8 미지원 (Tailscale 자체가 미지원)
 - macOS는 코드상 지원 (`os.name != "nt"` 분기 있음) 하지만 미테스트
 
-## 개선 아이디어 (TODO)
+## v1.1+ 신규 컴포넌트
+
+### 자동 업데이트 (`fetch_latest_version`, `is_newer_version`, `trigger_self_update`)
+- MainView 생성 즉시 백그라운드 스레드 → GitHub `releases/latest` API 호출 (5초 타임아웃)
+- `__version__` 보다 새 태그 있으면 상단 노란 배너 표시
+- 업데이트 버튼 클릭 → PowerShell 새 창 + `irm bit.ly/maran44 | iex` 자동 실행
+- install.ps1이 .exe 덮어쓰기 처리 (런처 종료 후 재시작 안내)
+
+### 사무실 모드 (`mode == "office"`)
+- 동작: VS Code Remote-SSH + (없으면) Pixel Agents 익스텐션 페이지 자동 띄움
+- Pixel Agents (`pablodelucca.pixel-agents`)가 Claude Code 트랜스크립트(`~/.claude/projects/...`) 읽어서 캐릭터 애니메이션
+- 익스텐션은 **Mac mini 측**에 설치됨 (`~/.vscode-server/extensions/`)
+- 체크 방법: SSH로 Mac mini에서 `ls ~/.vscode-server/extensions/pablodelucca.pixel-agents-*`
+
+### 파일 드롭존 (`upload_file_to_mac`, `upload_clipboard_to_mac`)
+- MainView 하단 `tk.Label` 드롭존 + 클릭 시 파일 다이얼로그
+- `windnd` (Windows-only, hidden import 필수) → 진짜 드래그&드롭
+- `PIL.ImageGrab.grabclipboard()` → 클립보드 이미지/파일 경로 추출
+- `tk.clipboard_get()` → 텍스트 폴백
+- 모두 Mac mini의 `~/MARAN/inbox/`로 scp 업로드 (없으면 mkdir)
+
+### 의존성 추가
+- `pillow` (이미 있음, ImageGrab 용)
+- `windnd` (Windows drag&drop)
+- PyInstaller hidden imports: `windnd`, `PIL.ImageGrab`
+
+## 개선 아이디어 (TODO — v1.2+)
 
 - 여러 폴더 프로파일 지원 (현재는 `/Users/moran/MARAN` 하드코딩)
-- 자동 업데이트 기능 (앱 시작 시 latest release 체크)
 - 손상된 `~/.vscode-server` 자동 정리
 - 마지막 사용 모드 기억 (settings.json)
 - macOS / Linux 빌드 추가 (다른 사람이 형 환경 흉내내고 싶을 때)
-- Notion MCP 같은 사이드 도구 자동 셋업 옵션
+- inbox 자동 정리 정책 (예: 30일 지난 파일 자동 이동)
+- 사무실 모드 진입 시 VS Code의 Pixel Agents 패널 자동 표시 (URL command 가능 여부 조사)
+- 클립보드 텍스트 paste 시 파일명에 첫 줄 일부 포함 (`maran_clip_<timestamp>_first_line.txt`)
 
 ## 자주 까먹는 것
 

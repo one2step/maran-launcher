@@ -26,6 +26,32 @@ MAC_PROJECT_PATH_REMOTE = "~/MARAN"
 SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
+# === 자동 업데이트 ===
+__version__ = "1.1.0"  # release 태그와 일치시킬 것 (v1.1.0)
+GITHUB_REPO = "one2step/maran-launcher"
+RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
+
+# === 파일 드롭존 ===
+INBOX_REMOTE_DIR = "~/MARAN/inbox"
+
+# === 사무실 모드 (Pixel Agents) ===
+PIXEL_AGENTS_EXT_ID = "pablodelucca.pixel-agents"
+
+# === 옵셔널: drag&drop (Windows에서 windnd 있으면 활성) ===
+try:
+    import windnd  # type: ignore
+    HAS_WINDND = True
+except Exception:
+    HAS_WINDND = False
+
+# === 옵셔널: 클립보드 이미지 (PIL) ===
+try:
+    from PIL import ImageGrab  # type: ignore
+    HAS_PIL = True
+except Exception:
+    HAS_PIL = False
+
 # === 색상 (Catppuccin Mocha) ===
 COLOR_BG = "#1e1e2e"
 COLOR_PANEL = "#181825"
@@ -51,6 +77,53 @@ CREATE_NEW_CONSOLE = 0x00000010 if os.name == "nt" else 0
 # ============================================================
 # Prereq Check Functions
 # ============================================================
+
+def fetch_latest_version():
+    """GitHub API에서 latest release tag. 'v1.2.3' → '1.2.3'. 실패시 None.
+    네트워크 5초 타임아웃. 백그라운드 스레드에서만 호출할 것."""
+    try:
+        import urllib.request
+        import json
+        req = urllib.request.Request(
+            RELEASES_API,
+            headers={"User-Agent": f"maran-launcher/{__version__}"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.load(resp)
+        return (data.get("tag_name") or "").lstrip("v") or None
+    except Exception:
+        return None
+
+
+def is_newer_version(latest, current):
+    """버전 'a.b.c' 형식 비교. latest > current면 True. 파싱 실패시 False."""
+    try:
+        ln = [int(x) for x in latest.split(".")[:3]]
+        cn = [int(x) for x in current.split(".")[:3]]
+        ln += [0] * (3 - len(ln))
+        cn += [0] * (3 - len(cn))
+        return tuple(ln) > tuple(cn)
+    except Exception:
+        return False
+
+
+def check_pixel_agents_extension():
+    """Mac mini의 ~/.vscode-server/extensions/ 에 pablodelucca.pixel-agents 있는지 SSH로 확인.
+    Remote-SSH 모드라 VS Code 익스텐션은 Mac 쪽에 깔림."""
+    if not check_ssh_no_password():
+        return False
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+             f"{MAC_USER}@{MAC_HOST}",
+             "ls -d ~/.vscode-server/extensions/pablodelucca.pixel-agents-* 2>/dev/null | head -1"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        return bool(r.stdout.strip())
+    except Exception:
+        return False
+
 
 def check_winget_available():
     return shutil.which("winget") is not None
@@ -409,6 +482,142 @@ def install_remote_ssh_extension(log_fn):
         return False, f"VS Code 실행 실패: {e}"
 
 
+def install_pixel_agents_extension(log_fn):
+    """VS Code 확장 페이지(pixel-agents)를 띄움. 사용자가 [Install in SSH: ...] 클릭."""
+    if not check_vscode_installed():
+        return False, "VS Code 먼저 설치 필요"
+
+    url = f"vscode:extension/{PIXEL_AGENTS_EXT_ID}"
+    try:
+        os.startfile(url)
+        log_fn("VS Code 확장 페이지 띄움 (Pixel Agents).")
+        log_fn("→ Remote-SSH 워크스페이스가 열려있다면 [Install in SSH: 100.122.161.94]")
+        log_fn("→ 아니면 일단 로컬 [Install] 후, 사무실 모드 처음 진입 시 Mac에 자동 설치됨")
+        log_fn("→ 마란 런처로 돌아와 '🔄 새로고침' 클릭")
+        return True, "VS Code에서 [Install] 후 새로고침"
+    except Exception:
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", url],
+                creationflags=CREATE_NO_WINDOW,
+            )
+            return True, "VS Code에서 [Install] 후 새로고침"
+        except Exception as e:
+            return False, f"VS Code 실행 실패: {e}"
+
+
+def trigger_self_update(log_fn=None):
+    """install.ps1 (i.ps1)을 PowerShell 새 창에서 실행 → 자동 다운로드 + 교체."""
+    if os.name != "nt":
+        return False, "Windows 전용"
+    cmd = f"irm {INSTALL_URL} | iex"
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoExit", "-ExecutionPolicy", "Bypass",
+             "-Command", cmd],
+            creationflags=CREATE_NEW_CONSOLE,
+        )
+        if log_fn:
+            log_fn("PowerShell 창에서 업데이트 진행. 끝나면 런처를 다시 켜세요.")
+        return True, "업데이터 띄움"
+    except Exception as e:
+        return False, str(e)
+
+
+def ensure_inbox_dir():
+    """Mac mini에 ~/MARAN/inbox/ 폴더 보장. 한번만 호출하면 충분."""
+    try:
+        subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             f"{MAC_USER}@{MAC_HOST}",
+             f"mkdir -p {INBOX_REMOTE_DIR}"],
+            capture_output=True, timeout=10,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def upload_file_to_mac(local_path, log_fn=None):
+    """scp로 로컬 파일을 Mac mini의 ~/MARAN/inbox/ 에 업로드."""
+    p = Path(local_path)
+    if not p.exists() or not p.is_file():
+        return False, f"파일 없음: {local_path}"
+
+    if not check_mac_reachable():
+        return False, "Mac mini 도달 불가 (Tailscale 점검)"
+
+    target = f"{MAC_USER}@{MAC_HOST}:{INBOX_REMOTE_DIR}/"
+    try:
+        ensure_inbox_dir()
+        r = subprocess.run(
+            ["scp", "-B", "-o", "ConnectTimeout=10",
+             str(p), target],
+            capture_output=True, text=True, timeout=180,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        if r.returncode == 0:
+            return True, f"업로드 완료: {p.name}"
+        return False, (r.stderr or r.stdout or "scp 실패")[:200].strip()
+    except FileNotFoundError:
+        return False, "scp 없음. OpenSSH 클라이언트 설치 필요"
+    except Exception as e:
+        return False, str(e)
+
+
+def upload_clipboard_to_mac(log_fn=None):
+    """Windows 클립보드 → Mac inbox.
+    이미지면 PNG로 저장 후 업로드. 파일 경로 리스트면 각각 업로드.
+    텍스트는 .txt로 저장 후 업로드."""
+    if not HAS_PIL:
+        return False, "Pillow 미설치 (이미지 클립보드 지원 안 됨)"
+
+    try:
+        clip = ImageGrab.grabclipboard()
+    except Exception as e:
+        return False, f"클립보드 읽기 실패: {e}"
+
+    # 1) 파일 경로 리스트 (Windows에서 파일 복사 → 클립보드)
+    if isinstance(clip, list):
+        if not clip:
+            return False, "클립보드에 파일 없음"
+        ok_count = 0
+        msgs = []
+        for fp in clip:
+            ok, msg = upload_file_to_mac(fp, log_fn)
+            if ok:
+                ok_count += 1
+            msgs.append(f"{Path(fp).name}: {msg}")
+        return ok_count > 0, f"{ok_count}/{len(clip)} 업로드. " + " | ".join(msgs[:3])
+
+    # 2) PIL 이미지 (스크린샷 또는 그림판 복사)
+    if clip is not None and hasattr(clip, "save"):
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        tmp = Path(tempfile.gettempdir()) / f"maran_clip_{ts}.png"
+        try:
+            clip.save(str(tmp), "PNG")
+        except Exception as e:
+            return False, f"이미지 저장 실패: {e}"
+        return upload_file_to_mac(str(tmp), log_fn)
+
+    # 3) 텍스트 폴백 (PIL.ImageGrab은 텍스트 안 줌 → tkinter clipboard 사용)
+    return False, "클립보드에 이미지/파일 없음 (텍스트는 미지원)"
+
+
+def upload_clipboard_text_to_mac(text, log_fn=None):
+    """tkinter clipboard로 받은 텍스트 → .txt 파일로 업로드."""
+    if not text or not text.strip():
+        return False, "빈 텍스트"
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    tmp = Path(tempfile.gettempdir()) / f"maran_clip_{ts}.txt"
+    try:
+        tmp.write_text(text, encoding="utf-8")
+    except Exception as e:
+        return False, f"텍스트 저장 실패: {e}"
+    return upload_file_to_mac(str(tmp), log_fn)
+
+
 def open_tailscale_app(log_fn):
     candidates = [
         r"C:\Program Files\Tailscale\Tailscale.exe",
@@ -636,6 +845,9 @@ class SetupView:
             ("remote_ssh", "VS Code Remote-SSH 확장 (옵션)",
              check_remote_ssh_extension, install_remote_ssh_extension,
              "VS Code 열기", False),
+            ("pixel_agents", "Pixel Agents 익스텐션 (사무실 모드)",
+             check_pixel_agents_extension, install_pixel_agents_extension,
+             "VS Code 열기", False),
             ("wt", "Windows Terminal (옵션)",
              check_windows_terminal, install_windows_terminal, "설치", False),
         ]
@@ -786,6 +998,8 @@ class MainView:
         self._auto_pending = None
         self.frame = tk.Frame(parent, bg=COLOR_BG)
         self._build()
+        # 백그라운드 업데이트 체크 (UI 블록 X)
+        threading.Thread(target=self._check_update_async, daemon=True).start()
 
     def pack(self, **kw):
         self.frame.pack(**kw)
@@ -800,7 +1014,28 @@ class MainView:
         self._auto_pending = mode
 
     def _build(self):
-        # 우측 상단 설정 버튼
+        # === 업데이트 배너 (조건부 표시) ===
+        self.update_bar = tk.Frame(self.frame, bg=COLOR_WARN)
+        self.update_label = tk.Label(
+            self.update_bar, text="",
+            font=("맑은 고딕", 9, "bold"),
+            fg="#1e1e2e", bg=COLOR_WARN,
+            padx=10, pady=4,
+        )
+        self.update_label.pack(side=tk.LEFT)
+        self.update_btn = tk.Button(
+            self.update_bar, text="업데이트",
+            font=("맑은 고딕", 9, "bold"),
+            bg="#1e1e2e", fg=COLOR_WARN,
+            activebackground=COLOR_PANEL,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._do_update,
+            padx=10, pady=2,
+        )
+        self.update_btn.pack(side=tk.RIGHT, padx=6, pady=2)
+        # 기본은 숨김 (업데이트 있으면 _check_update_async가 띄움)
+
+        # === 우측 상단 설정 버튼 + 버전 ===
         top = tk.Frame(self.frame, bg=COLOR_BG)
         top.pack(fill=tk.X, padx=8, pady=(8, 0))
         tk.Button(
@@ -811,6 +1046,10 @@ class MainView:
             command=self.on_setup if self.on_setup else lambda: None,
             padx=6,
         ).pack(side=tk.RIGHT)
+        tk.Label(
+            top, text=f"v{__version__}", font=("맑은 고딕", 8),
+            fg=COLOR_DIM, bg=COLOR_BG,
+        ).pack(side=tk.LEFT, padx=4)
 
         tk.Label(
             self.frame, text="🚀 마란 런처",
@@ -828,26 +1067,37 @@ class MainView:
         btns.pack(pady=(0, 14))
 
         self.btn_vscode = tk.Button(
-            btns, text="🖥  VS Code", width=14,
-            font=("맑은 고딕", 11, "bold"),
+            btns, text="🖥  VS Code", width=12,
+            font=("맑은 고딕", 10, "bold"),
             bg=COLOR_BTN_VSCODE, fg="#1e1e2e",
             activebackground=COLOR_BTN_VSCODE_HOVER,
             relief=tk.FLAT, bd=0, cursor="hand2",
             command=lambda: self.start("vscode"),
-            padx=10, pady=8,
+            padx=8, pady=8,
         )
-        self.btn_vscode.pack(side=tk.LEFT, padx=6)
+        self.btn_vscode.pack(side=tk.LEFT, padx=4)
+
+        self.btn_office = tk.Button(
+            btns, text="🏢  사무실", width=12,
+            font=("맑은 고딕", 10, "bold"),
+            bg=COLOR_BTN_INSTALL, fg="#1e1e2e",
+            activebackground=COLOR_BTN_INSTALL_HOVER,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=lambda: self.start("office"),
+            padx=8, pady=8,
+        )
+        self.btn_office.pack(side=tk.LEFT, padx=4)
 
         self.btn_term = tk.Button(
-            btns, text="💻  Terminal", width=14,
-            font=("맑은 고딕", 11, "bold"),
+            btns, text="💻  Terminal", width=12,
+            font=("맑은 고딕", 10, "bold"),
             bg=COLOR_BTN_TERM, fg="#1e1e2e",
             activebackground=COLOR_BTN_TERM_HOVER,
             relief=tk.FLAT, bd=0, cursor="hand2",
             command=lambda: self.start("terminal"),
-            padx=10, pady=8,
+            padx=8, pady=8,
         )
-        self.btn_term.pack(side=tk.LEFT, padx=6)
+        self.btn_term.pack(side=tk.LEFT, padx=4)
 
         rows = tk.Frame(self.frame, bg=COLOR_BG)
         rows.pack(fill=tk.X, padx=60)
@@ -866,7 +1116,7 @@ class MainView:
         ).pack(pady=(12, 6), padx=20)
 
         opts = tk.Frame(self.frame, bg=COLOR_BG)
-        opts.pack(pady=(0, 12))
+        opts.pack(pady=(0, 8))
 
         self.auto_close = tk.BooleanVar(value=True)
         tk.Checkbutton(
@@ -888,18 +1138,162 @@ class MainView:
             activebackground=COLOR_BG, activeforeground=COLOR_FG, bd=0,
         ).pack(side=tk.LEFT, padx=8)
 
+        # === 파일 드롭존 ===
+        drop_label_text = (
+            "📥 여기로 파일 드래그 또는 Ctrl+V"
+            if HAS_WINDND else
+            "📥 Ctrl+V로 클립보드 파일/이미지 전송"
+        )
+        self.drop_zone = tk.Label(
+            self.frame,
+            text=f"{drop_label_text}\n→ Mac mini ~/MARAN/inbox/",
+            font=("맑은 고딕", 9),
+            fg=COLOR_DIM, bg=COLOR_PANEL,
+            relief=tk.FLAT, bd=1,
+            padx=10, pady=12,
+            cursor="hand2",
+            justify=tk.CENTER,
+        )
+        self.drop_zone.pack(fill=tk.X, padx=24, pady=(2, 10))
+
+        # 클릭 시 파일 선택 다이얼로그
+        self.drop_zone.bind("<Button-1>", lambda e: self._pick_file_to_upload())
+
+        # Ctrl+V 클립보드 paste 바인딩 (frame 전체)
+        self.frame.bind_all("<Control-v>", self._handle_paste)
+        self.frame.bind_all("<Control-V>", self._handle_paste)
+
+        # windnd 드래그&드롭 hook
+        if HAS_WINDND:
+            try:
+                windnd.hook_dropfiles(self.drop_zone, func=self._handle_drop)
+            except Exception:
+                pass
+
+    # ============================================================
+    # Auto-update
+    # ============================================================
+
+    def _check_update_async(self):
+        """백그라운드: GitHub API에서 최신 버전 체크 → 새 버전 있으면 배너 표시."""
+        latest = fetch_latest_version()
+        if not latest:
+            return
+        if is_newer_version(latest, __version__):
+            self.frame.after(0, lambda: self._show_update_banner(latest))
+
+    def _show_update_banner(self, latest_ver):
+        self.update_label.config(
+            text=f"  🆕 새 버전 v{latest_ver} 있음 (현재 v{__version__})"
+        )
+        self.update_bar.pack(fill=tk.X, side=tk.TOP, before=self.frame.winfo_children()[1] if len(self.frame.winfo_children()) > 1 else None)
+
+    def _do_update(self):
+        ok, msg = trigger_self_update(self.log)
+        if ok:
+            self.log("업데이트 PowerShell 창 띄움. 끝나면 런처 다시 켜세요.")
+        else:
+            self.log(f"업데이트 실패: {msg}")
+
+    # ============================================================
+    # File drop / clipboard
+    # ============================================================
+
+    def _pick_file_to_upload(self):
+        """드롭존 클릭 시 파일 선택 다이얼로그."""
+        try:
+            from tkinter import filedialog
+            paths = filedialog.askopenfilenames(
+                title="Mac mini로 전송할 파일 선택",
+            )
+            if paths:
+                self._upload_files(list(paths))
+        except Exception as e:
+            self.log(f"파일 선택 실패: {e}")
+
+    def _handle_drop(self, files):
+        """windnd hook 콜백. files: list[bytes] 경로"""
+        try:
+            paths = [
+                f.decode("utf-8", errors="replace") if isinstance(f, bytes) else f
+                for f in files
+            ]
+            self._upload_files(paths)
+        except Exception as e:
+            self.log(f"드롭 처리 실패: {e}")
+
+    def _handle_paste(self, event=None):
+        """Ctrl+V → 클립보드에서 이미지/파일/텍스트 추출 → Mac 전송."""
+        # 이미지/파일 우선 (PIL.ImageGrab)
+        threading.Thread(target=self._paste_thread, daemon=True).start()
+
+    def _paste_thread(self):
+        self.log("📋 클립보드 확인 중...")
+        ok, msg = upload_clipboard_to_mac(self.log)
+        if ok:
+            self.log(f"✅ {msg}")
+            self._flash_drop_zone(COLOR_OK)
+            return
+        # 텍스트 폴백
+        try:
+            text = self.frame.clipboard_get()
+        except tk.TclError:
+            text = ""
+        if text:
+            ok, msg = upload_clipboard_text_to_mac(text, self.log)
+            if ok:
+                self.log(f"✅ {msg}")
+                self._flash_drop_zone(COLOR_OK)
+                return
+        self.log(f"❌ {msg}")
+        self._flash_drop_zone(COLOR_ERROR)
+
+    def _upload_files(self, paths):
+        threading.Thread(
+            target=self._upload_files_thread, args=(paths,), daemon=True
+        ).start()
+
+    def _upload_files_thread(self, paths):
+        ok_count = 0
+        for p in paths:
+            self.log(f"⬆ 업로드: {Path(p).name}")
+            ok, msg = upload_file_to_mac(p, self.log)
+            if ok:
+                ok_count += 1
+                self.log(f"✅ {msg}")
+            else:
+                self.log(f"❌ {Path(p).name}: {msg}")
+        if ok_count > 0:
+            self._flash_drop_zone(COLOR_OK)
+            self.log(f"📦 {ok_count}/{len(paths)} 업로드 완료 → ~/MARAN/inbox/")
+        else:
+            self._flash_drop_zone(COLOR_ERROR)
+
+    def _flash_drop_zone(self, color):
+        """드롭존 색깔 잠깐 깜박여서 결과 시각 피드백."""
+        try:
+            orig = self.drop_zone.cget("fg")
+            self.drop_zone.config(fg=color)
+            self.frame.after(800, lambda: self.drop_zone.config(fg=orig))
+        except Exception:
+            pass
+
     def log(self, msg):
         self.log_var.set(msg)
         self.frame.update_idletasks()
 
     def start(self, mode):
         self.btn_vscode.config(state=tk.DISABLED)
+        self.btn_office.config(state=tk.DISABLED)
         self.btn_term.config(state=tk.DISABLED)
         for s in (self.s_tail, self.s_mac, self.s_run):
             s.pending()
-        self.s_run.label.config(
-            text="VS Code 실행" if mode == "vscode" else "Terminal 실행"
-        )
+        run_label = {
+            "vscode": "VS Code 실행",
+            "office": "VS Code + 사무실 실행",
+            "terminal": "Terminal 실행",
+        }.get(mode, "실행")
+        self.s_run.label.config(text=run_label)
         threading.Thread(target=self._pipeline, args=(mode,), daemon=True).start()
 
     def _pipeline(self, mode):
@@ -928,6 +1322,19 @@ class MainView:
                 ok = self._launch_vscode()
                 fail_msg = "VS Code 실행 실패. ⚙ 설정에서 VS Code를 설치하세요."
                 done_msg = "✅ VS Code에서 MARAN 폴더를 확인하세요."
+            elif mode == "office":
+                self.log("VS Code + Pixel Agents 사무실 실행 중...")
+                ok = self._launch_vscode()
+                if ok:
+                    if not check_pixel_agents_extension():
+                        self.log("⚠ Pixel Agents 익스텐션 미설치 — VS Code에서 자동 설치 페이지가 뜹니다.")
+                        try:
+                            time.sleep(2)
+                            os.startfile(f"vscode:extension/{PIXEL_AGENTS_EXT_ID}")
+                        except Exception:
+                            pass
+                fail_msg = "VS Code 실행 실패. ⚙ 설정에서 점검하세요."
+                done_msg = "✅ VS Code 열리면 하단 [Pixel Agents] 패널 → '+ Agent' 클릭."
             else:
                 self.log("Terminal SSH 세션 실행 중...")
                 ok = self._launch_terminal(self.auto_claude.get())
@@ -946,6 +1353,7 @@ class MainView:
                 self.frame.after(1500, self.frame.master.destroy)
             else:
                 self.btn_vscode.config(state=tk.NORMAL)
+                self.btn_office.config(state=tk.NORMAL)
                 self.btn_term.config(state=tk.NORMAL)
         except Exception as e:
             self.log(f"예기치 않은 오류: {e}")
@@ -953,6 +1361,7 @@ class MainView:
 
     def _fail(self):
         self.btn_vscode.config(state=tk.NORMAL)
+        self.btn_office.config(state=tk.NORMAL)
         self.btn_term.config(state=tk.NORMAL)
 
     @staticmethod
@@ -1115,7 +1524,8 @@ class MaranLauncher:
 
     def show_main(self):
         self.setup_view.pack_forget()
-        self.root.geometry(self._center(460, 430))
+        # 사무실 버튼 + 드롭존 추가로 세로 키움
+        self.root.geometry(self._center(500, 580))
         self.main_view.pack(fill=tk.BOTH, expand=True)
 
     def _center(self, w, h):
@@ -1134,15 +1544,21 @@ def main():
                    help="(레거시) 자동으로 VS Code 모드 실행")
     p.add_argument("--vscode", action="store_true",
                    help="자동으로 VS Code Remote-SSH 모드 실행")
+    p.add_argument("--office", action="store_true",
+                   help="자동으로 사무실 모드 (VS Code + Pixel Agents) 실행")
     p.add_argument("--terminal", action="store_true",
                    help="자동으로 Terminal SSH 모드 실행")
     p.add_argument("--setup", action="store_true",
                    help="환경 설정 화면으로 시작 (강제)")
+    p.add_argument("--version", action="version",
+                   version=f"마란 런처 v{__version__}")
     args = p.parse_args()
 
     auto_mode = None
     if args.terminal:
         auto_mode = "terminal"
+    elif args.office:
+        auto_mode = "office"
     elif args.vscode or args.auto:
         auto_mode = "vscode"
 
