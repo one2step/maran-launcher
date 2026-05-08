@@ -27,7 +27,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.1.0"  # release 태그와 일치시킬 것 (v2.1.0)
+__version__ = "2.2.0"  # release 태그와 일치시킬 것 (v2.2.0)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -65,6 +65,19 @@ try:
     HAS_PIL = True
 except Exception:
     HAS_PIL = False
+
+# === 옵셔널: 트레이 아이콘 (pystray) ===
+try:
+    import pystray  # type: ignore
+    from PIL import Image as PILImage, ImageDraw as PILImageDraw  # type: ignore
+    HAS_TRAY = True
+except Exception:
+    HAS_TRAY = False
+
+# === 단일 인스턴스 socket ===
+SINGLE_INSTANCE_PORT = 17239  # 임의 포트, 첫 인스턴스가 점유
+SINGLE_INSTANCE_HOST = "127.0.0.1"
+TRAY_TITLE = "MARAN.LAUNCH"
 
 # === 색상 (v2.0 Hacker — Mr.Robot/lazygit 톤) ===
 COLOR_BG = "#0a0a0a"          # 거의 검정
@@ -1202,29 +1215,57 @@ class MainView:
 
     def _build(self):
         # ════════════════════════════════════════════════════════
-        # HEADER — MARAN.LAUNCH v1.x.y / TARGET / setup btn
+        # HEADER — MARAN.LAUNCH v1.x.y / TARGET / setup btn / [_][×]
+        # 헤더 영역 자체가 창 드래그 핸들 (frameless 모드용)
         # ════════════════════════════════════════════════════════
         header = tk.Frame(self.frame, bg=COLOR_BG)
         header.pack(fill=tk.X, padx=14, pady=(10, 0))
 
         title_left = tk.Frame(header, bg=COLOR_BG)
         title_left.pack(side=tk.LEFT)
-        tk.Label(
+        title_label = tk.Label(
             title_left, text="MARAN.LAUNCH",
             font=FONT_TITLE, fg=COLOR_OK, bg=COLOR_BG,
-        ).pack(side=tk.LEFT)
-        tk.Label(
+        )
+        title_label.pack(side=tk.LEFT)
+        version_label = tk.Label(
             title_left, text=f"  v{__version__}",
             font=FONT_MONO, fg=COLOR_DIM2, bg=COLOR_BG,
-        ).pack(side=tk.LEFT, padx=(2, 0))
+        )
+        version_label.pack(side=tk.LEFT, padx=(2, 0))
 
+        # 우상단 윈도우 컨트롤 (오른쪽부터 배치)
+        # [×] 트레이로
+        tk.Button(
+            header, text="[×]",
+            font=FONT_MONO_BOLD, fg=COLOR_ERROR, bg=COLOR_BG,
+            activebackground=COLOR_BG, activeforeground="#ff8888",
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._on_close_to_tray,
+        ).pack(side=tk.RIGHT, padx=(2, 0))
+
+        # [_] 작업표시줄로 최소화
+        tk.Button(
+            header, text="[_]",
+            font=FONT_MONO_BOLD, fg=COLOR_DIM, bg=COLOR_BG,
+            activebackground=COLOR_BG, activeforeground=COLOR_FG,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._on_minimize,
+        ).pack(side=tk.RIGHT, padx=(2, 0))
+
+        # [⚙ setup]
         tk.Button(
             header, text="[⚙ setup]",
             font=FONT_MONO, fg=COLOR_DIM, bg=COLOR_BG,
             activebackground=COLOR_BG, activeforeground=COLOR_OK,
             relief=tk.FLAT, bd=0, cursor="hand2",
             command=self.on_setup if self.on_setup else lambda: None,
-        ).pack(side=tk.RIGHT)
+        ).pack(side=tk.RIGHT, padx=(0, 8))
+
+        # 헤더 드래그 핸들러 (frameless 창 이동)
+        for w in (header, title_left, title_label, version_label):
+            w.bind("<ButtonPress-1>", self._drag_start)
+            w.bind("<B1-Motion>", self._drag_move)
 
         # TARGET line
         target_bar = tk.Frame(self.frame, bg=COLOR_BG)
@@ -1514,6 +1555,41 @@ class MainView:
             txt = "● DIRECT" if ok else "● UNREACHABLE"
             color = COLOR_OK if ok else COLOR_ERROR
             self.frame.after(0, lambda: self.conn_state.config(text=txt, fg=color))
+        except Exception:
+            pass
+
+    # ────────────────────────────────────────────────────────────
+    # Frameless 창 드래그 / 최소화 / 트레이로
+    # ────────────────────────────────────────────────────────────
+
+    def _drag_start(self, event):
+        self._drag_x = event.x_root - self.frame.master.winfo_x()
+        self._drag_y = event.y_root - self.frame.master.winfo_y()
+
+    def _drag_move(self, event):
+        try:
+            x = event.x_root - self._drag_x
+            y = event.y_root - self._drag_y
+            self.frame.master.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+    def _on_minimize(self):
+        """[_] 클릭 → 작업표시줄로 최소화 (frameless에선 OS 윈도우 hide+iconify 트릭)."""
+        try:
+            root = self.frame.master
+            # frameless 창은 그냥 iconify가 안 먹음 → 임시로 overrideredirect 해제
+            root.overrideredirect(False)
+            root.iconify()
+            # 다시 보일 때 재진입은 _on_deiconify에서 overrideredirect 복원
+        except Exception:
+            pass
+
+    def _on_close_to_tray(self):
+        """[×] 클릭 → 창 숨기고 트레이만 남김. 프로세스 종료 X."""
+        try:
+            root = self.frame.master
+            root.withdraw()
         except Exception:
             pass
 
@@ -1873,14 +1949,35 @@ class MainView:
                 ok = self._launch_vscode()
                 if ok:
                     if not check_pixel_agents_extension():
-                        self.log("⚠ Pixel Agents 익스텐션 미설치 — VS Code에서 자동 설치 페이지가 뜹니다.")
+                        self.log("⚠ Pixel Agents 익스텐션 미설치 — VS Code에서 설치 페이지 띄움")
                         try:
                             time.sleep(2)
                             os.startfile(f"vscode:extension/{PIXEL_AGENTS_EXT_ID}")
                         except Exception:
                             pass
+                    else:
+                        self.log("✓ Pixel Agents 익스텐션 확인됨 (Mac)")
+                        # 패널 자동 활성화 시도 (VS Code 워크스페이스 로드 후)
+                        def _auto_open_panel():
+                            time.sleep(5)  # Remote-SSH 워크스페이스 안정화 대기
+                            try:
+                                # vscode://command/<id> URL → VS Code가 명령 실행 (사용자 확인 다이얼로그 뜰 수 있음)
+                                if os.name == "nt":
+                                    os.startfile("vscode://command/pixel-agents.showPanel")
+                                else:
+                                    subprocess.Popen(
+                                        ["cmd", "/c", "start", "", "vscode://command/pixel-agents.showPanel"],
+                                        creationflags=CREATE_NO_WINDOW,
+                                    )
+                            except Exception:
+                                pass
+                        threading.Thread(target=_auto_open_panel, daemon=True).start()
+                        self.log("  → 5초 후 패널 자동 활성화 시도 (확인창 뜨면 'Open' 클릭)")
                 fail_msg = "VS Code 실행 실패. ⚙ 설정에서 점검하세요."
-                done_msg = "✅ VS Code 열리면 하단 [Pixel Agents] 패널 → '+ Agent' 클릭."
+                done_msg = (
+                    "✅ 안 뜨면: Ctrl+Shift+P → 'Pixel Agents: Show Panel' "
+                    "(또는 View → Open View → Pixel Agents). 한 번 켜두면 다음부터 자동."
+                )
             else:
                 self.log("Terminal SSH 세션 실행 중...")
                 ok = self._launch_terminal(self.auto_claude.get())
@@ -2042,6 +2139,21 @@ class MaranLauncher:
         self.root.configure(bg=COLOR_BG)
         self.root.resizable(False, False)
 
+        # frameless: OS 타이틀바/창 컨트롤 제거 (헤더에 자체 [_][×] 둠)
+        try:
+            self.root.overrideredirect(True)
+        except Exception:
+            pass
+
+        # 외부에서 OS X로 닫으려 해도 트레이로 가게 (frameless면 안 옴 — 보험)
+        self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+
+        # iconify로 작업표시줄 갔다가 다시 deiconify되면 overrideredirect 복원
+        self.root.bind("<Map>", self._on_map)
+
+        # 트레이 컨트롤러 (있으면)
+        self.tray = None
+
         self.setup_view = SetupView(self.root, on_continue=self.show_main)
         self.main_view = MainView(self.root, on_setup=self.show_setup)
 
@@ -2056,6 +2168,59 @@ class MaranLauncher:
             if auto_mode:
                 self.main_view.schedule_auto(auto_mode)
             self.show_main()
+
+    def _on_map(self, event=None):
+        """창이 다시 보여질 때(아이콘 → 화면) overrideredirect 복원."""
+        try:
+            self.root.overrideredirect(True)
+        except Exception:
+            pass
+
+    # ────────────────────────────────────────────────────────────
+    # Tray 통합
+    # ────────────────────────────────────────────────────────────
+
+    def attach_tray(self, tray):
+        self.tray = tray
+
+    def show_window(self):
+        """다른 인스턴스 또는 트레이에서 호출 — 메인 스레드로 위임."""
+        try:
+            self.root.after(0, self._show_window_main)
+        except Exception:
+            pass
+
+    def _show_window_main(self):
+        try:
+            self.root.deiconify()
+            self.root.overrideredirect(True)
+            self.root.lift()
+            try:
+                self.root.attributes("-topmost", True)
+                self.root.after(200, lambda: self.root.attributes("-topmost", False))
+            except Exception:
+                pass
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    def hide_to_tray(self):
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+
+    def quit_app(self):
+        """완전 종료 — 트레이 멈추고 mainloop 종료."""
+        try:
+            if self.tray is not None:
+                self.tray.stop()
+        except Exception:
+            pass
+        try:
+            self.root.after(0, self.root.destroy)
+        except Exception:
+            pass
 
     @staticmethod
     def _needs_setup():
@@ -2086,6 +2251,115 @@ class MaranLauncher:
         self.root.mainloop()
 
 
+# ============================================================
+# Tray Icon (pystray)
+# ============================================================
+
+def make_tray_image():
+    """16x16 또는 32x32 'M' 픽셀 아이콘. 검정 배경 + 네온 그린."""
+    if not HAS_TRAY:
+        return None
+    img = PILImage.new("RGB", (32, 32), (10, 10, 10))
+    d = PILImageDraw.Draw(img)
+    # M 글자 (대각선 두 줄 + 양쪽 세로)
+    g = (0, 255, 156)
+    # 좌세로
+    d.rectangle([6, 6, 9, 26], fill=g)
+    # 우세로
+    d.rectangle([22, 6, 25, 26], fill=g)
+    # 가운데 V (대각선 두 줄)
+    for i in range(8):
+        d.point((9 + i, 7 + i), fill=g)
+        d.point((10 + i, 7 + i), fill=g)
+        d.point((22 - i, 7 + i), fill=g)
+        d.point((21 - i, 7 + i), fill=g)
+    return img
+
+
+class TrayController:
+    """pystray 트레이 아이콘 + 좌클릭=Show, 우클릭=Show/Quit."""
+
+    def __init__(self, on_show, on_quit):
+        if not HAS_TRAY:
+            self.icon = None
+            return
+        self.icon = pystray.Icon(
+            "maran_launcher",
+            icon=make_tray_image(),
+            title=TRAY_TITLE,
+            menu=pystray.Menu(
+                pystray.MenuItem(
+                    "Show MARAN.LAUNCH", on_show, default=True,
+                ),
+                pystray.MenuItem("Quit", on_quit),
+            ),
+        )
+
+    def run(self):
+        if self.icon:
+            try:
+                self.icon.run()
+            except Exception:
+                pass
+
+    def stop(self):
+        if self.icon:
+            try:
+                self.icon.stop()
+            except Exception:
+                pass
+
+
+# ============================================================
+# Single Instance (socket-based)
+# ============================================================
+
+def try_acquire_single_instance():
+    """첫 인스턴스면 listening socket 반환. 이미 떠있으면 None."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind((SINGLE_INSTANCE_HOST, SINGLE_INSTANCE_PORT))
+        s.listen(5)
+        return s
+    except OSError:
+        return None
+
+
+def send_signal_to_first_instance(signal=b"SHOW"):
+    """이미 떠있는 인스턴스에 신호 전송."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect((SINGLE_INSTANCE_HOST, SINGLE_INSTANCE_PORT))
+        s.sendall(signal + b"\n")
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def listen_for_signals(server_sock, launcher):
+    """첫 인스턴스의 listener 스레드. SHOW/QUIT 받음."""
+    while True:
+        try:
+            client, _ = server_sock.accept()
+            data = client.recv(64)
+            client.close()
+            if not data:
+                continue
+            if b"SHOW" in data:
+                launcher.show_window()
+            elif b"QUIT" in data:
+                launcher.quit_app()
+                break
+        except Exception:
+            time.sleep(0.5)
+
+
+# ============================================================
+# Entry Point
+# ============================================================
+
 def main():
     p = argparse.ArgumentParser(description="마란 런처")
     p.add_argument("--auto", action="store_true",
@@ -2098,9 +2372,16 @@ def main():
                    help="자동으로 Terminal SSH 모드 실행")
     p.add_argument("--setup", action="store_true",
                    help="환경 설정 화면으로 시작 (강제)")
+    p.add_argument("--quit", action="store_true",
+                   help="실행 중인 마란 런처 종료 (트레이 포함)")
     p.add_argument("--version", action="version",
                    version=f"마란 런처 v{__version__}")
     args = p.parse_args()
+
+    # --quit: 실행 중인 인스턴스에 종료 신호만 보내고 끝
+    if args.quit:
+        sent = send_signal_to_first_instance(b"QUIT")
+        sys.exit(0 if sent else 1)
 
     auto_mode = None
     if args.terminal:
@@ -2110,7 +2391,32 @@ def main():
     elif args.vscode or args.auto:
         auto_mode = "vscode"
 
-    MaranLauncher(auto_mode=auto_mode, force_setup=args.setup).run()
+    # === 단일 인스턴스 체크 ===
+    server_sock = try_acquire_single_instance()
+    if server_sock is None:
+        # 이미 마란 런처가 떠있음 → 그쪽에 SHOW 신호 보내고 자기는 종료
+        send_signal_to_first_instance(b"SHOW")
+        # 모드 자동 실행 요청이면 SHOW 다음 자동 모드는 무시 (간단 처리)
+        sys.exit(0)
+
+    # === 첫 인스턴스 ===
+    launcher = MaranLauncher(auto_mode=auto_mode, force_setup=args.setup)
+
+    # 트레이 시작 (pystray 있을 때만)
+    if HAS_TRAY:
+        tray = TrayController(
+            on_show=lambda icon=None, item=None: launcher.show_window(),
+            on_quit=lambda icon=None, item=None: launcher.quit_app(),
+        )
+        launcher.attach_tray(tray)
+        threading.Thread(target=tray.run, daemon=True).start()
+
+    # 단일 인스턴스 listener 스레드
+    threading.Thread(
+        target=listen_for_signals, args=(server_sock, launcher), daemon=True,
+    ).start()
+
+    launcher.run()
 
 
 if __name__ == "__main__":
