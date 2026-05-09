@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 
 # === 설정 ===
@@ -27,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.2.2"  # release 태그와 일치시킬 것 (v2.2.2)
+__version__ = "2.3.0"  # release 태그와 일치시킬 것 (v2.3.0)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -48,9 +49,6 @@ SMB_PATH_OUTBOX = f"{SMB_PATH_WIN}\\outbox"             # \\100.122.161.94\MARAN
 OUTBOX_INDEX_REMOTE = "~/MARAN/outbox/_index.json"
 DELIVERY_POLL_MS = 30_000     # 30초마다 ssh로 _index 갱신
 DELIVERY_SHOW_COUNT = 5       # UI에 보여줄 최근 항목 수
-
-# === 사무실 모드 (Pixel Agents) ===
-PIXEL_AGENTS_EXT_ID = "pablodelucca.pixel-agents"
 
 # === 옵셔널: drag&drop (Windows에서 windnd 있으면 활성) ===
 try:
@@ -95,8 +93,11 @@ COLOR_PROGRESS = "#ffb800"
 
 # 모드별 액센트 색 (버튼 텍스트만 색깔, 배경은 패널 톤)
 COLOR_ACCENT_VSCODE = "#5fafff"   # 사이안
-COLOR_ACCENT_OFFICE = "#ffb800"   # 앰버
 COLOR_ACCENT_TERM = "#00ff9c"     # 네온 그린
+COLOR_ACCENT_PLANET = "#bd93f9"   # 보라 (메인 홈페이지 행성)
+
+# 메인 홈페이지 (PLANET 버튼)
+PLANET_URL = "https://maran-chat-2026.web.app"
 
 # 호환성 (기존 코드 이름 유지 — 차후 정리)
 COLOR_BTN_VSCODE = COLOR_PANEL2
@@ -150,24 +151,6 @@ def is_newer_version(latest, current):
         ln += [0] * (3 - len(ln))
         cn += [0] * (3 - len(cn))
         return tuple(ln) > tuple(cn)
-    except Exception:
-        return False
-
-
-def check_pixel_agents_extension():
-    """Mac mini의 ~/.vscode-server/extensions/ 에 pablodelucca.pixel-agents 있는지 SSH로 확인.
-    Remote-SSH 모드라 VS Code 익스텐션은 Mac 쪽에 깔림."""
-    if not check_ssh_no_password():
-        return False
-    try:
-        r = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-             f"{MAC_USER}@{MAC_HOST}",
-             "ls -d ~/.vscode-server/extensions/pablodelucca.pixel-agents-* 2>/dev/null | head -1"],
-            capture_output=True, text=True, timeout=10,
-            creationflags=CREATE_NO_WINDOW,
-        )
-        return bool(r.stdout.strip())
     except Exception:
         return False
 
@@ -527,30 +510,6 @@ def install_remote_ssh_extension(log_fn):
         return True, "VS Code에서 [Install] 클릭 → 새로고침"
     except Exception as e:
         return False, f"VS Code 실행 실패: {e}"
-
-
-def install_pixel_agents_extension(log_fn):
-    """VS Code 확장 페이지(pixel-agents)를 띄움. 사용자가 [Install in SSH: ...] 클릭."""
-    if not check_vscode_installed():
-        return False, "VS Code 먼저 설치 필요"
-
-    url = f"vscode:extension/{PIXEL_AGENTS_EXT_ID}"
-    try:
-        os.startfile(url)
-        log_fn("VS Code 확장 페이지 띄움 (Pixel Agents).")
-        log_fn("→ Remote-SSH 워크스페이스가 열려있다면 [Install in SSH: 100.122.161.94]")
-        log_fn("→ 아니면 일단 로컬 [Install] 후, 사무실 모드 처음 진입 시 Mac에 자동 설치됨")
-        log_fn("→ 마란 런처로 돌아와 '🔄 새로고침' 클릭")
-        return True, "VS Code에서 [Install] 후 새로고침"
-    except Exception:
-        try:
-            subprocess.Popen(
-                ["cmd", "/c", "start", "", url],
-                creationflags=CREATE_NO_WINDOW,
-            )
-            return True, "VS Code에서 [Install] 후 새로고침"
-        except Exception as e:
-            return False, f"VS Code 실행 실패: {e}"
 
 
 def _open_smb_path(path, log_fn=None):
@@ -1083,9 +1042,6 @@ class SetupView:
             ("remote_ssh", "VS Code Remote-SSH 확장 (옵션)",
              check_remote_ssh_extension, install_remote_ssh_extension,
              "VS Code 열기", False),
-            ("pixel_agents", "Pixel Agents 익스텐션 (사무실 모드)",
-             check_pixel_agents_extension, install_pixel_agents_extension,
-             "VS Code 열기", False),
             ("wt", "Windows Terminal (옵션)",
              check_windows_terminal, install_windows_terminal, "설치", False),
         ]
@@ -1322,7 +1278,7 @@ class MainView:
         self._sep(self.frame)
 
         # ════════════════════════════════════════════════════════
-        # STATUS — Tailscale / SSH / Pixel Agents 라이브 상태
+        # STATUS — Tailscale / SSH / 실행 라이브 상태
         # ════════════════════════════════════════════════════════
         self._section_header(self.frame, "STATUS")
         status_box = tk.Frame(self.frame, bg=COLOR_BG)
@@ -1331,7 +1287,7 @@ class MainView:
         self.s_tail.pack(fill=tk.X, pady=1)
         self.s_mac = HackerStatusRow(status_box, "ssh-agent")
         self.s_mac.pack(fill=tk.X, pady=1)
-        self.s_run = HackerStatusRow(status_box, "pixel-agents")
+        self.s_run = HackerStatusRow(status_box, "exec")
         self.s_run.pack(fill=tk.X, pady=1)
 
         self._sep(self.frame)
@@ -1349,17 +1305,18 @@ class MainView:
         )
         self.btn_vscode.pack(side=tk.LEFT, padx=(0, 6))
 
-        self.btn_office = self._hack_btn(
-            exec_box, "▸ office", COLOR_ACCENT_OFFICE,
-            lambda: self.start("office"),
-        )
-        self.btn_office.pack(side=tk.LEFT, padx=6)
-
         self.btn_term = self._hack_btn(
             exec_box, "▸ shell", COLOR_ACCENT_TERM,
             lambda: self.start("terminal"),
         )
         self.btn_term.pack(side=tk.LEFT, padx=6)
+
+        # 우측: PLANET — 메인 홈페이지(허브) 바로 열기
+        self.btn_planet = self._hack_btn(
+            exec_box, "◉ PLANET", COLOR_ACCENT_PLANET,
+            self._open_planet,
+        )
+        self.btn_planet.pack(side=tk.RIGHT, padx=(6, 0))
 
         # 옵션 (작게) — auto-close 제거 (v2.2.1+, 항상 창 유지, 트레이로만 닫음)
         opts = tk.Frame(self.frame, bg=COLOR_BG)
@@ -1582,6 +1539,14 @@ class MainView:
             padx=10, pady=5,
         )
         return btn
+
+    def _open_planet(self):
+        """메인 홈페이지(허브) 기본 브라우저로 열기."""
+        try:
+            webbrowser.open(PLANET_URL)
+            self.log(f"PLANET 열림: {PLANET_URL}")
+        except Exception as e:
+            self.log(f"PLANET 열기 실패: {e}")
 
     def _refresh_conn_state(self):
         """target_bar 우측 연결 상태 라벨 갱신."""
@@ -1941,13 +1906,11 @@ class MainView:
 
     def start(self, mode):
         self.btn_vscode.config(state=tk.DISABLED)
-        self.btn_office.config(state=tk.DISABLED)
         self.btn_term.config(state=tk.DISABLED)
         for s in (self.s_tail, self.s_mac, self.s_run):
             s.pending()
         run_label = {
             "vscode": "VS Code 실행",
-            "office": "VS Code + 사무실 실행",
             "terminal": "Terminal 실행",
         }.get(mode, "실행")
         self.s_run.label.config(text=run_label)
@@ -1979,40 +1942,6 @@ class MainView:
                 ok = self._launch_vscode()
                 fail_msg = "VS Code 실행 실패. ⚙ 설정에서 VS Code를 설치하세요."
                 done_msg = "✅ VS Code에서 MARAN 폴더를 확인하세요."
-            elif mode == "office":
-                self.log("VS Code + Pixel Agents 사무실 실행 중...")
-                ok = self._launch_vscode()
-                if ok:
-                    if not check_pixel_agents_extension():
-                        self.log("⚠ Pixel Agents 익스텐션 미설치 — VS Code에서 설치 페이지 띄움")
-                        try:
-                            time.sleep(2)
-                            os.startfile(f"vscode:extension/{PIXEL_AGENTS_EXT_ID}")
-                        except Exception:
-                            pass
-                    else:
-                        self.log("✓ Pixel Agents 익스텐션 확인됨 (Mac)")
-                        # 패널 자동 활성화 시도 (VS Code 워크스페이스 로드 후)
-                        def _auto_open_panel():
-                            time.sleep(5)  # Remote-SSH 워크스페이스 안정화 대기
-                            try:
-                                # vscode://command/<id> URL → VS Code가 명령 실행 (사용자 확인 다이얼로그 뜰 수 있음)
-                                if os.name == "nt":
-                                    os.startfile("vscode://command/pixel-agents.showPanel")
-                                else:
-                                    subprocess.Popen(
-                                        ["cmd", "/c", "start", "", "vscode://command/pixel-agents.showPanel"],
-                                        creationflags=CREATE_NO_WINDOW,
-                                    )
-                            except Exception:
-                                pass
-                        threading.Thread(target=_auto_open_panel, daemon=True).start()
-                        self.log("  → 5초 후 패널 자동 활성화 시도 (확인창 뜨면 'Open' 클릭)")
-                fail_msg = "VS Code 실행 실패. ⚙ 설정에서 점검하세요."
-                done_msg = (
-                    "✅ 안 뜨면: Ctrl+Shift+P → 'Pixel Agents: Show Panel' "
-                    "(또는 View → Open View → Pixel Agents). 한 번 켜두면 다음부터 자동."
-                )
             else:
                 self.log("Terminal SSH 세션 실행 중...")
                 ok = self._launch_terminal(self.auto_claude.get())
@@ -2029,7 +1958,6 @@ class MainView:
 
             # v2.2.1: 작업 완료 후에도 창은 계속 띄움. 트레이([×])로 사용자가 직접 닫음.
             self.btn_vscode.config(state=tk.NORMAL)
-            self.btn_office.config(state=tk.NORMAL)
             self.btn_term.config(state=tk.NORMAL)
         except Exception as e:
             self.log(f"예기치 않은 오류: {e}")
@@ -2037,7 +1965,6 @@ class MainView:
 
     def _fail(self):
         self.btn_vscode.config(state=tk.NORMAL)
-        self.btn_office.config(state=tk.NORMAL)
         self.btn_term.config(state=tk.NORMAL)
 
     @staticmethod
@@ -2399,8 +2326,6 @@ def main():
                    help="(레거시) 자동으로 VS Code 모드 실행")
     p.add_argument("--vscode", action="store_true",
                    help="자동으로 VS Code Remote-SSH 모드 실행")
-    p.add_argument("--office", action="store_true",
-                   help="자동으로 사무실 모드 (VS Code + Pixel Agents) 실행")
     p.add_argument("--terminal", action="store_true",
                    help="자동으로 Terminal SSH 모드 실행")
     p.add_argument("--setup", action="store_true",
@@ -2419,8 +2344,6 @@ def main():
     auto_mode = None
     if args.terminal:
         auto_mode = "terminal"
-    elif args.office:
-        auto_mode = "office"
     elif args.vscode or args.auto:
         auto_mode = "vscode"
 
