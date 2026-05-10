@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.4.0"  # release 태그와 일치시킬 것 (v2.4.0)
+__version__ = "2.4.1"  # release 태그와 일치시킬 것 (v2.4.1)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -2170,6 +2170,10 @@ class MaranLauncher:
         # iconify로 작업표시줄 갔다가 다시 deiconify되면 overrideredirect 복원
         self.root.bind("<Map>", self._on_map)
 
+        # frameless 창을 작업표시줄에 항상 표시 (Windows-only 트릭)
+        # update_idletasks 후 hwnd 확정되면 스타일 강제
+        self.root.after(50, self._force_taskbar_icon)
+
         # 트레이 컨트롤러 (있으면)
         self.tray = None
 
@@ -2194,6 +2198,36 @@ class MaranLauncher:
             self.root.overrideredirect(True)
         except Exception:
             pass
+        # overrideredirect(True) 재진입 시 WS_EX_TOOLWINDOW 가 다시 붙음 → 스타일 재강제
+        self.root.after(20, self._force_taskbar_icon)
+
+    def _force_taskbar_icon(self):
+        """frameless(overrideredirect=True) 창을 Windows 작업표시줄에 강제 표시.
+
+        원리: tk overrideredirect(True) 는 Windows 에서 WS_EX_TOOLWINDOW 를 자동
+        적용해 작업표시줄 아이콘을 숨김. WS_EX_APPWINDOW 를 켜고 TOOLWINDOW 를
+        끈 뒤 withdraw → deiconify 사이클로 스타일 변경을 OS 가 인식하게 함.
+        macOS/Linux 에서는 no-op.
+        """
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            if not hwnd:
+                return
+            GWL_EXSTYLE = -20
+            WS_EX_APPWINDOW = 0x00040000
+            WS_EX_TOOLWINDOW = 0x00000080
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            new_style = (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
+            if new_style != style:
+                ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+                # 스타일 변경 적용 강제: 잠깐 withdraw 후 deiconify
+                self.root.withdraw()
+                self.root.after(10, self.root.deiconify)
+        except Exception:
+            pass
 
     # ────────────────────────────────────────────────────────────
     # Tray 통합
@@ -2213,6 +2247,8 @@ class MaranLauncher:
         try:
             self.root.deiconify()
             self.root.overrideredirect(True)
+            # 트레이 → 복귀 시에도 작업표시줄 아이콘 보장
+            self.root.after(20, self._force_taskbar_icon)
             self.root.lift()
             try:
                 self.root.attributes("-topmost", True)
