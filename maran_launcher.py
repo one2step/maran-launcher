@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.4.1"  # release 태그와 일치시킬 것 (v2.4.1)
+__version__ = "2.4.2"  # release 태그와 일치시킬 것 (v2.4.2)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -37,6 +37,11 @@ INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
 INBOX_REMOTE_DIR = "~/MARAN/inbox"
 OUTBOX_REMOTE_DIR = "~/MARAN/outbox"  # Mac→Windows 방향 (Claude가 올리는 곳)
 SHARED_REMOTE_DIR = "~/MARAN/shared"  # NAS 작업 폴더 (사용자가 직접 들락날락)
+
+# === 인박스 업로드 로컬 로그 (사용자 데이터) ===
+INBOX_LOG_FILENAME = "inbox_log.json"
+INBOX_LOG_MAX = 50            # 디스크에 누적 보관 최대 건수
+INBOX_LOG_SHOW = 5            # UI 좌측 패널에 표시할 최근 건수
 
 # === NAS (SMB 공유) ===
 SMB_SHARE_NAME = "MARAN"
@@ -687,7 +692,65 @@ def ensure_inbox_dir():
         return False
 
 
-def upload_file_to_mac(local_path, log_fn=None):
+def _user_data_dir():
+    """런처가 사용자 데이터(인박스 로그 등)를 저장하는 폴더.
+    Windows: %LOCALAPPDATA%\\MaranLauncher
+    macOS/Linux: ~/.maran_launcher (개발 환경 호환)
+    """
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return Path(base) / "MaranLauncher"
+    return Path(os.path.expanduser("~")) / ".maran_launcher"
+
+
+def _inbox_log_path():
+    return _user_data_dir() / INBOX_LOG_FILENAME
+
+
+def log_inbox_upload(name, source="file"):
+    """업로드 성공 후 호출. inbox_log.json 에 한 줄 추가 (최대 INBOX_LOG_MAX)."""
+    import json
+    try:
+        path = _inbox_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entries = []
+        if path.exists():
+            try:
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(entries, list):
+                    entries = []
+            except Exception:
+                entries = []
+        entries.append({
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "name": Path(name).name,
+            "source": source,  # file / clipboard / drop
+        })
+        entries = entries[-INBOX_LOG_MAX:]
+        path.write_text(
+            json.dumps(entries, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def read_inbox_log(n=INBOX_LOG_SHOW):
+    """최근 n 건을 최신이 위로 오게 반환."""
+    import json
+    try:
+        path = _inbox_log_path()
+        if not path.exists():
+            return []
+        entries = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(entries, list):
+            return []
+        return list(reversed(entries[-n:]))
+    except Exception:
+        return []
+
+
+def upload_file_to_mac(local_path, log_fn=None, source="file"):
     """scp로 로컬 파일을 Mac mini의 ~/MARAN/inbox/ 에 업로드."""
     p = Path(local_path)
     if not p.exists() or not p.is_file():
@@ -706,6 +769,7 @@ def upload_file_to_mac(local_path, log_fn=None):
             creationflags=CREATE_NO_WINDOW,
         )
         if r.returncode == 0:
+            log_inbox_upload(p.name, source=source)
             return True, f"업로드 완료: {p.name}"
         return False, (r.stderr or r.stdout or "scp 실패")[:200].strip()
     except FileNotFoundError:
@@ -733,7 +797,7 @@ def upload_clipboard_to_mac(log_fn=None):
         ok_count = 0
         msgs = []
         for fp in clip:
-            ok, msg = upload_file_to_mac(fp, log_fn)
+            ok, msg = upload_file_to_mac(fp, log_fn, source="clipboard")
             if ok:
                 ok_count += 1
             msgs.append(f"{Path(fp).name}: {msg}")
@@ -747,7 +811,7 @@ def upload_clipboard_to_mac(log_fn=None):
             clip.save(str(tmp), "PNG")
         except Exception as e:
             return False, f"이미지 저장 실패: {e}"
-        return upload_file_to_mac(str(tmp), log_fn)
+        return upload_file_to_mac(str(tmp), log_fn, source="clipboard")
 
     # 3) 텍스트 폴백 (PIL.ImageGrab은 텍스트 안 줌 → tkinter clipboard 사용)
     return False, "클립보드에 이미지/파일 없음 (텍스트는 미지원)"
@@ -763,7 +827,7 @@ def upload_clipboard_text_to_mac(text, log_fn=None):
         tmp.write_text(text, encoding="utf-8")
     except Exception as e:
         return False, f"텍스트 저장 실패: {e}"
-    return upload_file_to_mac(str(tmp), log_fn)
+    return upload_file_to_mac(str(tmp), log_fn, source="clipboard")
 
 
 def open_tailscale_app(log_fn):
@@ -1410,15 +1474,47 @@ class MainView:
         self._sep(self.frame)
 
         # ════════════════════════════════════════════════════════
-        # TRANSFER — 드롭존 (Ctrl+V 안내, 클립보드 버튼 제거)
+        # TRANSFER — 좌측 최근 업로드 로그 / 우측 드롭존 (좌우 분할)
         # ════════════════════════════════════════════════════════
         self._section_header(self.frame, "TRANSFER", suffix="  → ~/MARAN/inbox/")
 
-        drop_outer = tk.Frame(
-            self.frame, bg=COLOR_PANEL,
+        transfer_split = tk.Frame(self.frame, bg=COLOR_BG)
+        transfer_split.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 6))
+
+        # 좌측 패널 — 최근 업로드 로그 (5개)
+        log_panel = tk.Frame(
+            transfer_split, bg=COLOR_PANEL,
             highlightbackground=COLOR_BORDER, highlightthickness=1,
         )
-        drop_outer.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 6))
+        log_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+
+        log_head = tk.Frame(log_panel, bg=COLOR_PANEL)
+        log_head.pack(fill=tk.X, padx=8, pady=(6, 4))
+        tk.Label(
+            log_head, text="recent uploads",
+            font=FONT_MONO_BOLD, fg=COLOR_OK, bg=COLOR_PANEL,
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            log_head, text=f"  · last {INBOX_LOG_SHOW}",
+            font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_PANEL,
+        ).pack(side=tk.LEFT)
+
+        self.inbox_log_labels = []
+        for _ in range(INBOX_LOG_SHOW):
+            row = tk.Label(
+                log_panel, text="  --:--:--  -",
+                font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_PANEL,
+                anchor="w", justify=tk.LEFT,
+            )
+            row.pack(fill=tk.X, padx=8, pady=1)
+            self.inbox_log_labels.append(row)
+
+        # 우측 패널 — 드롭존 (Ctrl+V / [+ select file])
+        drop_outer = tk.Frame(
+            transfer_split, bg=COLOR_PANEL,
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+        )
+        drop_outer.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(4, 0))
 
         # 가운데 정렬 위해 spacer
         tk.Frame(drop_outer, bg=COLOR_PANEL).pack(expand=True)
@@ -1454,6 +1550,9 @@ class MainView:
                 windnd.hook_dropfiles(self.drop_title, func=self._handle_drop)
             except Exception:
                 pass
+
+        # 시작 시 로그 1회 로드
+        self._refresh_inbox_log()
 
         # ════════════════════════════════════════════════════════
         # FOOTER — version / IP / update check (항상 표시)
@@ -1819,7 +1918,7 @@ class MainView:
                 f.decode("utf-8", errors="replace") if isinstance(f, bytes) else f
                 for f in files
             ]
-            self._upload_files(paths)
+            self._upload_files(paths, source="drop")
         except Exception as e:
             self.log(f"드롭 처리 실패: {e}")
 
@@ -1834,6 +1933,10 @@ class MainView:
         if ok:
             self.log(f"✅ {msg}")
             self._flash_drop_zone(COLOR_OK)
+            try:
+                self.frame.after(0, self._refresh_inbox_log)
+            except Exception:
+                pass
             return
         # 텍스트 폴백
         try:
@@ -1845,20 +1948,24 @@ class MainView:
             if ok:
                 self.log(f"✅ {msg}")
                 self._flash_drop_zone(COLOR_OK)
+                try:
+                    self.frame.after(0, self._refresh_inbox_log)
+                except Exception:
+                    pass
                 return
         self.log(f"❌ {msg}")
         self._flash_drop_zone(COLOR_ERROR)
 
-    def _upload_files(self, paths):
+    def _upload_files(self, paths, source="file"):
         threading.Thread(
-            target=self._upload_files_thread, args=(paths,), daemon=True
+            target=self._upload_files_thread, args=(paths, source), daemon=True
         ).start()
 
-    def _upload_files_thread(self, paths):
+    def _upload_files_thread(self, paths, source="file"):
         ok_count = 0
         for p in paths:
             self.log(f"⬆ 업로드: {Path(p).name}")
-            ok, msg = upload_file_to_mac(p, self.log)
+            ok, msg = upload_file_to_mac(p, self.log, source=source)
             if ok:
                 ok_count += 1
                 self.log(f"✅ {msg}")
@@ -1867,8 +1974,35 @@ class MainView:
         if ok_count > 0:
             self._flash_drop_zone(COLOR_OK)
             self.log(f"📦 {ok_count}/{len(paths)} 업로드 완료 → ~/MARAN/inbox/")
+            try:
+                self.frame.after(0, self._refresh_inbox_log)
+            except Exception:
+                pass
         else:
             self._flash_drop_zone(COLOR_ERROR)
+
+    def _refresh_inbox_log(self):
+        """좌측 'recent uploads' 5줄을 inbox_log.json 최신 상태로 갱신."""
+        try:
+            entries = read_inbox_log(INBOX_LOG_SHOW)
+        except Exception:
+            entries = []
+        for i, lbl in enumerate(self.inbox_log_labels):
+            if i < len(entries):
+                e = entries[i]
+                ts_full = e.get("ts", "")  # "YYYY-MM-DD HH:MM:SS"
+                ts_short = ts_full[-8:] if len(ts_full) >= 8 else ts_full
+                name = e.get("name", "?")
+                src = e.get("source", "")
+                src_mark = {"clipboard": "📋", "drop": "⬇", "file": "📁"}.get(src, "·")
+                if len(name) > 32:
+                    name = name[:29] + "..."
+                lbl.config(
+                    text=f"  {ts_short}  {src_mark} {name}",
+                    fg=COLOR_DIM if i > 0 else COLOR_OK,
+                )
+            else:
+                lbl.config(text="  --:--:--  -", fg=COLOR_DIM2)
 
     def _flash_drop_zone(self, color):
         """드롭존 타이틀 색깔 잠깐 깜박여서 결과 시각 피드백."""
@@ -2198,15 +2332,17 @@ class MaranLauncher:
             self.root.overrideredirect(True)
         except Exception:
             pass
-        # overrideredirect(True) 재진입 시 WS_EX_TOOLWINDOW 가 다시 붙음 → 스타일 재강제
-        self.root.after(20, self._force_taskbar_icon)
+        # 재진입 시엔 redraw 사이클 없이 스타일만 보정 (깜빡임/자식 누락 방지)
+        self.root.after(20, lambda: self._force_taskbar_icon(redraw=False))
 
-    def _force_taskbar_icon(self):
+    def _force_taskbar_icon(self, redraw=True):
         """frameless(overrideredirect=True) 창을 Windows 작업표시줄에 강제 표시.
 
         원리: tk overrideredirect(True) 는 Windows 에서 WS_EX_TOOLWINDOW 를 자동
         적용해 작업표시줄 아이콘을 숨김. WS_EX_APPWINDOW 를 켜고 TOOLWINDOW 를
-        끈 뒤 withdraw → deiconify 사이클로 스타일 변경을 OS 가 인식하게 함.
+        끈 뒤 SetWindowPos(SWP_FRAMECHANGED) 로 OS 가 스타일 변경을 인식하게 함.
+        redraw=True 일 때만 withdraw→deiconify 사이클로 작업표시줄 아이콘 캐시 강제 갱신
+        (시작/트레이 복귀 시점). 일반 <Map> 재진입에선 redraw=False — 깜빡임 방지.
         macOS/Linux 에서는 no-op.
         """
         if os.name != "nt":
@@ -2221,9 +2357,22 @@ class MaranLauncher:
             WS_EX_TOOLWINDOW = 0x00000080
             style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
             new_style = (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
-            if new_style != style:
-                ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-                # 스타일 변경 적용 강제: 잠깐 withdraw 후 deiconify
+            if new_style == style:
+                return
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+            # SetWindowPos(SWP_FRAMECHANGED) 로 frame 변경 통지 (resize/redraw 없음)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+                | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+            if redraw:
+                # 작업표시줄 아이콘 캐시 강제 갱신 — 시작/트레이복귀 1회만
                 self.root.withdraw()
                 self.root.after(10, self.root.deiconify)
         except Exception:
