@@ -68,9 +68,28 @@ try {
 # 3) Create shortcuts with Ctrl+Alt+M
 $WshShell = New-Object -ComObject WScript.Shell
 
-# Use robust environment path detection (handles OneDrive, etc.)
-$desktopDir   = [Environment]::GetFolderPath("Desktop")
-$startMenuDir = [Environment]::GetFolderPath("Programs")
+# Maximum reliability: Get actual paths from registry (handles OneDrive redirection)
+function Get-SpecialFolder($name) {
+    $path = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -ErrorAction SilentlyContinue).$name
+    if ($null -eq $path) {
+        $path = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" -ErrorAction SilentlyContinue).$name
+    }
+    if ($null -ne $path) {
+        return [System.Environment]::ExpandEnvironmentVariables($path)
+    }
+    return $null
+}
+
+$desktopDir   = Get-SpecialFolder "Desktop"
+$startMenuDir = Get-SpecialFolder "Programs"
+
+# Fallback to defaults if registry lookup fails
+if ($null -eq $desktopDir -or !(Test-Path $desktopDir)) {
+    $desktopDir = Join-Path $env:USERPROFILE "Desktop"
+}
+if ($null -eq $startMenuDir -or !(Test-Path $startMenuDir)) {
+    $startMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+}
 
 $desktopLnk = Join-Path $desktopDir "$LNK_NAME.lnk"
 $startLnk   = Join-Path $startMenuDir "$LNK_NAME.lnk"
