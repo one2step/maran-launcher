@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.4.3"  # release 태그와 일치시킬 것 (v2.4.3)
+__version__ = "2.5.0"  # release 태그와 일치시킬 것 (v2.5.0)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -101,6 +101,7 @@ COLOR_ACCENT_VSCODE = "#5fafff"   # 사이안
 COLOR_ACCENT_TERM = "#00ff9c"     # 네온 그린
 COLOR_ACCENT_LLAMA = "#ffb86c"    # 오렌지 (로컬 LLM — Qwen via Ollama)
 COLOR_ACCENT_DANGER = "#ff5555"   # 빨강 (--dangerously-skip-permissions)
+COLOR_ACCENT_GEMINI = "#f1fa8c"   # 노랑 (Gemini CLI — 제미나이)
 COLOR_ACCENT_PLANET = "#bd93f9"   # 보라 (메인 홈페이지 행성)
 
 # 메인 홈페이지 (PLANET 버튼)
@@ -1391,6 +1392,13 @@ class MainView:
         )
         self.btn_danger.pack(side=tk.LEFT, padx=6)
 
+        # ✦ gemini — Gemini CLI (제미나이)
+        self.btn_gemini = self._hack_btn(
+            exec_box, "✦ gemini", COLOR_ACCENT_GEMINI,
+            lambda: self.start("gemini"),
+        )
+        self.btn_gemini.pack(side=tk.LEFT, padx=6)
+
         # 우측: PLANET — 메인 홈페이지(허브) 바로 열기
         self.btn_planet = self._hack_btn(
             exec_box, "◉ PLANET", COLOR_ACCENT_PLANET,
@@ -1811,8 +1819,10 @@ class MainView:
             font=FONT_MONO, fg=COLOR_FG, bg=COLOR_BG, anchor="w",
         ).pack(side=tk.LEFT, padx=(2, 6))
 
-        # 우측: 프로젝트명 + 열기 버튼
+        # 우측: 프로젝트명 + 열기 버튼 (이미지면 [🖼] 추가)
         smb = smb_path_for_outbox_rel(entry.get("rel_path", ""))
+        fname_lower = entry.get("filename", "").lower()
+        is_image = any(fname_lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
 
         tk.Button(
             row, text="[📁]",
@@ -1822,6 +1832,16 @@ class MainView:
             command=lambda p=smb: self._on_delivery_click(p, entry),
             padx=4,
         ).pack(side=tk.RIGHT)
+
+        if is_image and HAS_PIL:
+            tk.Button(
+                row, text="[🖼]",
+                font=FONT_MONO_TINY, fg=COLOR_ACCENT_GEMINI, bg=COLOR_BG,
+                activebackground=COLOR_PANEL2, activeforeground=COLOR_ACCENT_GEMINI,
+                relief=tk.FLAT, bd=0, cursor="hand2",
+                command=lambda p=smb: self._on_delivery_preview(p, entry),
+                padx=4,
+            ).pack(side=tk.RIGHT)
 
         proj = entry.get("project", "")[:14]
         tk.Label(
@@ -1834,17 +1854,77 @@ class MainView:
         if open_explorer_select(smb_path):
             self.log(f"▸ opened: {Path(smb_path).name}")
         else:
-            # Windows 외 환경 또는 실패: 폴더만 열기
             open_smb_outbox(self.log)
-        # 본 것으로 처리
+        self._mark_delivery_seen()
+
+    def _on_delivery_preview(self, smb_path, entry):
+        """[🖼] 클릭: 이미지 팝업 뷰어."""
+        self._mark_delivery_seen()
+        threading.Thread(
+            target=self._show_image_popup, args=(smb_path, entry), daemon=True
+        ).start()
+
+    def _mark_delivery_seen(self):
         self._delivery_last_seen_ts = self._delivery_entries[0]["ts"] if self._delivery_entries else ""
         self._render_delivery_list()
-        # footer NEW 강조 해제
         try:
             self.foot_update.config(text=" ↻ check update ", fg=COLOR_DIM)
-            # 단, 진짜 새 버전이 있으면 update banner가 다시 띄움 (다음 폴링 시)
         except Exception:
             pass
+
+    def _show_image_popup(self, smb_path, entry):
+        """별도 스레드에서 이미지 로드 → 메인 스레드에 팝업 예약."""
+        try:
+            from PIL import Image as PILImage, ImageTk
+        except ImportError:
+            self.log("PIL 없음 — pip install pillow 필요")
+            return
+
+        try:
+            img = PILImage.open(smb_path)
+        except Exception as e:
+            self.log(f"이미지 열기 실패: {e}")
+            return
+
+        # 최대 800×600으로 축소
+        img.thumbnail((800, 600), PILImage.LANCZOS)
+
+        def _popup():
+            win = tk.Toplevel(self.root)
+            win.title(Path(smb_path).name)
+            win.configure(bg=COLOR_BG)
+            win.resizable(False, False)
+
+            photo = ImageTk.PhotoImage(img)
+            # 참조 유지 (GC 방지)
+            win._photo = photo
+
+            tk.Label(win, image=photo, bg=COLOR_BG).pack(padx=8, pady=8)
+
+            fname = entry.get("filename", Path(smb_path).name)
+            proj = entry.get("project", "")
+            tk.Label(
+                win,
+                text=f"{fname}  ·  {proj}",
+                font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
+            ).pack(pady=(0, 6))
+
+            tk.Button(
+                win, text="[ close ]",
+                font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_BG,
+                activebackground=COLOR_PANEL2, activeforeground=COLOR_FG,
+                relief=tk.FLAT, bd=0, cursor="hand2",
+                command=win.destroy,
+            ).pack(pady=(0, 8))
+
+            # 화면 중앙에 위치
+            win.update_idletasks()
+            x = self.root.winfo_x() + (self.root.winfo_width() - win.winfo_width()) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - win.winfo_height()) // 2
+            win.geometry(f"+{x}+{y}")
+            win.focus_force()
+
+        self.root.after(0, _popup)
 
     def _signal_new_delivery(self, entry):
         """새 결과물 도착 알림: footer 깜박 + log."""
@@ -2059,6 +2139,7 @@ class MainView:
         self.btn_term.config(state=tk.DISABLED)
         self.btn_llama.config(state=tk.DISABLED)
         self.btn_danger.config(state=tk.DISABLED)
+        self.btn_gemini.config(state=tk.DISABLED)
         for s in (self.s_tail, self.s_mac, self.s_run):
             s.pending()
         run_label = {
@@ -2066,6 +2147,7 @@ class MainView:
             "terminal": "Terminal 실행",
             "llama": "llama 대화창",
             "danger": "danger mode (sonnet)",
+            "gemini": "Gemini CLI (제미나이)",
         }.get(mode, "실행")
         self.s_run.label.config(text=run_label)
         threading.Thread(target=self._pipeline, args=(mode,), daemon=True).start()
@@ -2106,6 +2188,11 @@ class MainView:
                 ok = self._launch_danger()
                 fail_msg = "danger mode 실행 실패."
                 done_msg = "✅ 새 터미널 창에 danger mode claude가 열렸습니다."
+            elif mode == "gemini":
+                self.log("Gemini CLI 실행 중 (제미나이)...")
+                ok = self._launch_gemini()
+                fail_msg = "Gemini CLI 실행 실패. 맥미니에 gemini CLI가 설치돼있는지 확인하세요."
+                done_msg = "✅ 새 터미널 창에 Gemini CLI가 열렸습니다."
             else:
                 self.log("Terminal SSH 세션 실행 중...")
                 ok = self._launch_terminal(self.auto_claude.get())
@@ -2125,6 +2212,7 @@ class MainView:
             self.btn_term.config(state=tk.NORMAL)
             self.btn_llama.config(state=tk.NORMAL)
             self.btn_danger.config(state=tk.NORMAL)
+            self.btn_gemini.config(state=tk.NORMAL)
         except Exception as e:
             self.log(f"예기치 않은 오류: {e}")
             self._fail()
@@ -2134,6 +2222,7 @@ class MainView:
         self.btn_term.config(state=tk.NORMAL)
         self.btn_llama.config(state=tk.NORMAL)
         self.btn_danger.config(state=tk.NORMAL)
+        self.btn_gemini.config(state=tk.NORMAL)
 
     @staticmethod
     def _launch_vscode():
@@ -2316,6 +2405,47 @@ class MainView:
             cmd_str = " ".join(_cmd_quote(a) for a in ssh_args)
             subprocess.Popen(
                 f'start "MARAN danger" cmd /k {cmd_str}', shell=True,
+            )
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _launch_gemini():
+        """Gemini CLI 새 터미널에서 실행.
+        GEMINI_CLI_TRUST_WORKSPACE=true 환경변수로 trust 오류 우회.
+        """
+        target = f"{MAC_USER}@{MAC_HOST}"
+        remote_cmd = (
+            f"cd {MAC_PROJECT_PATH_REMOTE} && "
+            f"GEMINI_CLI_TRUST_WORKSPACE=true gemini"
+        )
+        ssh_args = ["ssh", "-t", target, remote_cmd]
+
+        if shutil.which("wt"):
+            try:
+                subprocess.Popen(
+                    ["wt", "--title", "MARAN gemini"] + ssh_args,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                return True
+            except Exception:
+                pass
+
+        try:
+            ps_cmd = " ".join(_ps_quote(a) for a in ssh_args)
+            subprocess.Popen(
+                ["powershell", "-NoExit", "-Command", ps_cmd],
+                creationflags=CREATE_NEW_CONSOLE,
+            )
+            return True
+        except FileNotFoundError:
+            pass
+
+        try:
+            cmd_str = " ".join(_cmd_quote(a) for a in ssh_args)
+            subprocess.Popen(
+                f'start "MARAN gemini" cmd /k {cmd_str}', shell=True,
             )
             return True
         except Exception:

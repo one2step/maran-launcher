@@ -16,6 +16,8 @@ Claude Code가 이 프로젝트에서 작업할 때 필요한 맥락 정보.
 - **v2.0 해커 톤 전면 리디자인** (v2.0+): Mr.Robot/lazygit 영감. 검정 배경 + 옅은 흰 + 네온그린(동작)/앰버(주의)/사이안(정보) 액센트. Cascadia Mono 폰트. 섹션 헤더 STATUS/EXEC/NAS/TRANSFER로 정보 밀도 높임. 클립보드 버튼 제거 (Ctrl+V 통합). 업데이트는 하단 footer에 항상 표시 (새 버전 있으면 빨간 강조). HackerStatusRow 클래스로 `▸ name ......... ● ACTIVE` 한 줄.
 - **DELIVERY 섹션** (v2.1+): Mac→Windows 결과물 자동 전달. Claude/스크립트가 `python scripts/maran_deliver.py <파일> [프로젝트]` 실행 → `~/MARAN/outbox/<프로젝트>/<YYYY-MM-DD_HH-MM>_파일.확장자` 자동 정리 + `_index.json` 갱신. 마란 런처가 30초마다 SSH로 `_index.json` 폴링 → [DELIVERY] 섹션에 최근 5개 표시 (`● 시간 파일명 프로젝트 [📁]`). 새 항목 도착 시 footer `[NEW] delivery` 빨간 깜박. [📁] 클릭 = `explorer.exe /select,SMB경로`로 탐색기에서 파일 선택된 채로 폴더 열림.
 - **Frameless + Tray + 단일 인스턴스** (v2.2+): OS 타이틀바 제거(`overrideredirect(True)`) + 헤더에 자체 [⚙ setup][_][×] + 헤더 드래그로 창 이동. [×] = 트레이로 (withdraw, 프로세스 살아있음) / [_] = 작업표시줄로 (iconify 시 overrideredirect 임시 해제 → `<Map>` 이벤트로 복원). pystray 트레이 아이콘 (네온그린 M, 좌클릭=Show, 우클릭 메뉴=Show/Quit). socket(127.0.0.1:17239) 단일 인스턴스 — Ctrl+Alt+M 다시 누르면 두 번째 인스턴스가 첫 인스턴스에 SHOW 신호 보내고 자기는 종료, 첫 인스턴스의 listener 스레드가 `launcher.show_window()` 호출. CLI: `--quit` 플래그 추가 (외부에서 종료 신호).
+- **Gemini CLI 버튼** (v2.5+): EXEC 섹션에 `✦ gemini` 노란 버튼. SSH로 맥미니에 `GEMINI_CLI_TRUST_WORKSPACE=true gemini` 실행. `_launch_gemini()` / `COLOR_ACCENT_GEMINI = "#f1fa8c"`.
+- **DELIVERY 이미지 팝업** (v2.5+): DELIVERY 항목이 이미지 파일(.png/.jpg 등)이면 `[🖼]` 버튼 추가. PIL로 이미지 로드 → tkinter Toplevel 팝업. HAS_PIL False면 버튼 비표시. `_on_delivery_preview()` / `_show_image_popup()`.
 
 ## Repo / 배포
 
