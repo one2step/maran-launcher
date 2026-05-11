@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.2"  # release 태그와 일치시킬 것 (v2.5.2)
+__version__ = "2.5.3"  # release 태그와 일치시킬 것 (v2.5.3)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -2643,7 +2643,8 @@ class MaranLauncher:
             return
         canvas = tk.Canvas(self.root, bg=COLOR_BG, highlightthickness=0)
         canvas.place(x=0, y=0, relwidth=1, relheight=1)
-        canvas.lower()  # 콘텐츠 뒤로
+        # Canvas.lower()는 캔버스 아이템 메서드라 args 필요 — Tcl 직접 호출로 위젯 z-order 낮춤
+        self.root.tk.call("lower", canvas._w)
         self._bg_canvas = canvas
 
     def _draw_bg_effects(self):
