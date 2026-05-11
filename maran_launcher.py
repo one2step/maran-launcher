@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.1"  # release 태그와 일치시킬 것 (v2.5.0)
+__version__ = "2.5.2"  # release 태그와 일치시킬 것 (v2.5.2)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -1360,7 +1360,24 @@ class MainView:
         self._sep(self.frame)
 
         # ════════════════════════════════════════════════════════
-        # EXEC — 모드 선택 버튼 3개
+        # PLANET — 메인 홈페이지 허브 (독립 행)
+        # ════════════════════════════════════════════════════════
+        planet_box = tk.Frame(self.frame, bg=COLOR_BG)
+        planet_box.pack(fill=tk.X, padx=20, pady=(2, 4))
+        self.btn_planet = tk.Button(
+            planet_box, text="◉  PLANET  —  maran-chat-2026.web.app",
+            font=FONT_MONO_BOLD, fg=COLOR_ACCENT_PLANET, bg=COLOR_PANEL,
+            activebackground=COLOR_PANEL2, activeforeground=COLOR_ACCENT_PLANET,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._open_planet,
+            padx=10, pady=4, anchor="w",
+        )
+        self.btn_planet.pack(fill=tk.X)
+
+        self._sep(self.frame)
+
+        # ════════════════════════════════════════════════════════
+        # EXEC — 모드 선택 버튼
         # ════════════════════════════════════════════════════════
         self._section_header(self.frame, "EXEC")
         exec_box = tk.Frame(self.frame, bg=COLOR_BG)
@@ -1378,33 +1395,23 @@ class MainView:
         )
         self.btn_term.pack(side=tk.LEFT, padx=6)
 
-        # llama — 맥미니 로컬 LLM(Qwen via Ollama) 대화창
         self.btn_llama = self._hack_btn(
             exec_box, "λ llama", COLOR_ACCENT_LLAMA,
             lambda: self.start("llama"),
         )
         self.btn_llama.pack(side=tk.LEFT, padx=6)
 
-        # ! danger — --dangerously-skip-permissions + sonnet 모드
         self.btn_danger = self._hack_btn(
             exec_box, "! danger", COLOR_ACCENT_DANGER,
             lambda: self.start("danger"),
         )
         self.btn_danger.pack(side=tk.LEFT, padx=6)
 
-        # ✦ gemini — Gemini CLI (제미나이)
         self.btn_gemini = self._hack_btn(
             exec_box, "✦ gemini", COLOR_ACCENT_GEMINI,
             lambda: self.start("gemini"),
         )
         self.btn_gemini.pack(side=tk.LEFT, padx=6)
-
-        # 우측: PLANET — 메인 홈페이지(허브) 바로 열기
-        self.btn_planet = self._hack_btn(
-            exec_box, "◉ PLANET", COLOR_ACCENT_PLANET,
-            self._open_planet,
-        )
-        self.btn_planet.pack(side=tk.RIGHT, padx=(6, 0))
 
         # 옵션 (작게) — auto-close 제거 (v2.2.1+, 항상 창 유지, 트레이로만 닫음)
         opts = tk.Frame(self.frame, bg=COLOR_BG)
@@ -1833,7 +1840,7 @@ class MainView:
             padx=4,
         ).pack(side=tk.RIGHT)
 
-        if is_image and HAS_PIL:
+        if is_image:
             tk.Button(
                 row, text="[🖼]",
                 font=FONT_MONO_TINY, fg=COLOR_ACCENT_GEMINI, bg=COLOR_BG,
@@ -1873,58 +1880,54 @@ class MainView:
             pass
 
     def _show_image_popup(self, smb_path, entry):
-        """별도 스레드에서 이미지 로드 → 메인 스레드에 팝업 예약."""
+        """이미지 표시: PIL 있으면 인앱 팝업, 없으면 Windows 기본 뷰어로 열기."""
         try:
             from PIL import Image as PILImage, ImageTk
-        except ImportError:
-            self.log("PIL 없음 — pip install pillow 필요")
-            return
 
-        try:
             img = PILImage.open(smb_path)
-        except Exception as e:
-            self.log(f"이미지 열기 실패: {e}")
-            return
+            img.thumbnail((800, 600), PILImage.LANCZOS)
 
-        # 최대 800×600으로 축소
-        img.thumbnail((800, 600), PILImage.LANCZOS)
+            def _popup():
+                win = tk.Toplevel(self.root)
+                win.title(Path(smb_path).name)
+                win.configure(bg=COLOR_BG)
+                win.resizable(False, False)
 
-        def _popup():
-            win = tk.Toplevel(self.root)
-            win.title(Path(smb_path).name)
-            win.configure(bg=COLOR_BG)
-            win.resizable(False, False)
+                photo = ImageTk.PhotoImage(img)
+                win._photo = photo  # GC 방지
 
-            photo = ImageTk.PhotoImage(img)
-            # 참조 유지 (GC 방지)
-            win._photo = photo
+                tk.Label(win, image=photo, bg=COLOR_BG).pack(padx=8, pady=8)
 
-            tk.Label(win, image=photo, bg=COLOR_BG).pack(padx=8, pady=8)
+                fname = entry.get("filename", Path(smb_path).name)
+                proj = entry.get("project", "")
+                tk.Label(
+                    win, text=f"{fname}  ·  {proj}",
+                    font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
+                ).pack(pady=(0, 6))
 
-            fname = entry.get("filename", Path(smb_path).name)
-            proj = entry.get("project", "")
-            tk.Label(
-                win,
-                text=f"{fname}  ·  {proj}",
-                font=FONT_MONO_TINY, fg=COLOR_DIM, bg=COLOR_BG,
-            ).pack(pady=(0, 6))
+                tk.Button(
+                    win, text="[ close ]",
+                    font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_BG,
+                    activebackground=COLOR_PANEL2, activeforeground=COLOR_FG,
+                    relief=tk.FLAT, bd=0, cursor="hand2",
+                    command=win.destroy,
+                ).pack(pady=(0, 8))
 
-            tk.Button(
-                win, text="[ close ]",
-                font=FONT_MONO_TINY, fg=COLOR_DIM2, bg=COLOR_BG,
-                activebackground=COLOR_PANEL2, activeforeground=COLOR_FG,
-                relief=tk.FLAT, bd=0, cursor="hand2",
-                command=win.destroy,
-            ).pack(pady=(0, 8))
+                win.update_idletasks()
+                x = self.root.winfo_x() + (self.root.winfo_width() - win.winfo_width()) // 2
+                y = self.root.winfo_y() + (self.root.winfo_height() - win.winfo_height()) // 2
+                win.geometry(f"+{x}+{y}")
+                win.focus_force()
 
-            # 화면 중앙에 위치
-            win.update_idletasks()
-            x = self.root.winfo_x() + (self.root.winfo_width() - win.winfo_width()) // 2
-            y = self.root.winfo_y() + (self.root.winfo_height() - win.winfo_height()) // 2
-            win.geometry(f"+{x}+{y}")
-            win.focus_force()
+            self.root.after(0, _popup)
 
-        self.root.after(0, _popup)
+        except Exception:
+            # PIL 없거나 ImageTk 실패 → Windows 기본 뷰어로 열기
+            try:
+                os.startfile(smb_path)
+                self.log(f"▸ 이미지 열기: {Path(smb_path).name}")
+            except Exception as e:
+                self.log(f"이미지 열기 실패: {e}")
 
     def _signal_new_delivery(self, entry):
         """새 결과물 도착 알림: footer 깜박 + log."""
@@ -2627,11 +2630,70 @@ class MaranLauncher:
 
     def show_main(self):
         self.setup_view.pack_forget()
-        # v2.1: DELIVERY 섹션 추가로 좀 더 길게
-        self.root.geometry(self._center(580, 800))
+        self.root.geometry(self._center(580, 820))
         self.root.resizable(True, True)
         self.root.configure(bg=COLOR_BG)
-        self.main_view.pack(fill=tk.BOTH, expand=True)
+        self._init_bg_canvas()
+        self.main_view.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
+        self.root.after(150, self._draw_bg_effects)
+
+    def _init_bg_canvas(self):
+        """배경 Canvas 초기화 (별자리 + 그라데이션 테두리용)."""
+        if hasattr(self, "_bg_canvas"):
+            return
+        canvas = tk.Canvas(self.root, bg=COLOR_BG, highlightthickness=0)
+        canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        canvas.lower()  # 콘텐츠 뒤로
+        self._bg_canvas = canvas
+
+    def _draw_bg_effects(self):
+        """그라데이션 테두리 + 별자리를 bg_canvas에 그림. 정적(애니메이션 없음)."""
+        import random
+        if not hasattr(self, "_bg_canvas"):
+            return
+        c = self._bg_canvas
+        c.delete("all")
+        self.root.update_idletasks()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        if w < 10 or h < 10:
+            return
+
+        # --- 그라데이션 테두리 (중심으로 갈수록 어두워짐) ---
+        # 네온그린 기반 4단계 glow
+        border_colors = ["#0e2b1c", "#0b2016", "#081610", "#060e0a"]
+        for i, col in enumerate(border_colors):
+            c.create_rectangle(i, i, w - i - 1, h - i - 1,
+                               outline=col, width=1)
+
+        # --- 별자리 ---
+        random.seed(42)  # 고정 시드 → 매번 같은 패턴
+        stars = []
+        for _ in range(45):
+            x = random.randint(8, w - 8)
+            y = random.randint(8, h - 8)
+            stars.append((x, y))
+            # 별 크기: 대부분 1px, 간혹 2px
+            r = 1 if random.random() > 0.15 else 2
+            brightness = random.choice(["#1e2d24", "#162218", "#1a2a1f", "#243320"])
+            c.create_oval(x - r, y - r, x + r, y + r, fill=brightness, outline="")
+
+        # 가까운 별끼리 연결 (거리 90px 이내, 최대 연결 30개)
+        connections = 0
+        for i in range(len(stars)):
+            for j in range(i + 1, len(stars)):
+                if connections >= 30:
+                    break
+                dx = stars[i][0] - stars[j][0]
+                dy = stars[i][1] - stars[j][1]
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist < 90:
+                    c.create_line(
+                        stars[i][0], stars[i][1],
+                        stars[j][0], stars[j][1],
+                        fill="#0f1f16", width=1,
+                    )
+                    connections += 1
 
     def _center(self, w, h):
         self.root.update_idletasks()
