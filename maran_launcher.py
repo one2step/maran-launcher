@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.3"  # release 태그와 일치시킬 것 (v2.5.3)
+__version__ = "2.5.4"  # release 태그와 일치시킬 것 (v2.5.4)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -2746,6 +2746,9 @@ class TrayController:
                 pystray.MenuItem(
                     "Show MARAN.LAUNCH", on_show, default=True,
                 ),
+                pystray.MenuItem(
+                    "GAME :: 우주 생존기", self._open_game,
+                ),
                 pystray.MenuItem("Quit", on_quit),
             ),
         )
@@ -2763,6 +2766,16 @@ class TrayController:
                 self.icon.stop()
             except Exception:
                 pass
+
+    def _open_game(self, icon, item):
+        import webbrowser
+        # Mac mini URL directly, as this is a local web game on Mac side
+        url = "http://100.122.161.94:51238/space_survivor/index.html"
+        # Or if we want to open it as a local file via SMB
+        smb_url = "file://100.122.161.94/MARAN/space_survivor/index.html"
+        # The user's request "Mac mini 내부에서 찾아보고" suggests opening it from the Mac side or SMB
+        # Since the launcher is on Windows, SMB is more direct.
+        webbrowser.open(smb_url)
 
 
 # ============================================================

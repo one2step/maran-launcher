@@ -67,13 +67,20 @@ try {
 
 # 3) Create shortcuts with Ctrl+Alt+M
 $WshShell = New-Object -ComObject WScript.Shell
-$desktopLnk = Join-Path $env:USERPROFILE "Desktop\$LNK_NAME.lnk"
-$startLnk   = Join-Path $env:APPDATA   "Microsoft\Windows\Start Menu\Programs\$LNK_NAME.lnk"
+
+# Use robust environment path detection (handles OneDrive, etc.)
+$desktopDir   = [Environment]::GetFolderPath("Desktop")
+$startMenuDir = [Environment]::GetFolderPath("Programs")
+
+$desktopLnk = Join-Path $desktopDir "$LNK_NAME.lnk"
+$startLnk   = Join-Path $startMenuDir "$LNK_NAME.lnk"
 
 # Remove leftover broken Korean-named shortcuts from previous installs
-Get-ChildItem -Path "$env:USERPROFILE\Desktop" -Filter "*.lnk" -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ne "$LNK_NAME.lnk" -and $_.Name -match "(?i)maran|launcher" } |
-    Remove-Item -Force -ErrorAction SilentlyContinue
+if (Test-Path $desktopDir) {
+    Get-ChildItem -Path $desktopDir -Filter "*.lnk" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "$LNK_NAME.lnk" -and $_.Name -match "(?i)maran|launcher" } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
 
 foreach ($lnk in @($desktopLnk, $startLnk)) {
     $sc = $WshShell.CreateShortcut($lnk)
