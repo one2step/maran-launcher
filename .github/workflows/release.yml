@@ -28,7 +28,7 @@ jobs:
 
       - name: Build exe
         run: |
-          python -m PyInstaller --noconfirm --onefile --noconsole --clean --icon icon.ico --name maran-launcher --hidden-import windnd --hidden-import PIL.ImageGrab --hidden-import PIL.ImageDraw --hidden-import pystray --hidden-import pystray._win32 maran_launcher.py
+          python -m PyInstaller --noconfirm --onefile --noconsole --clean --icon icon.ico --name maran-launcher --hidden-import windnd --hidden-import PIL.ImageGrab --hidden-import PIL.ImageDraw --hidden-import PIL.ImageTk --hidden-import PIL.Image --hidden-import pystray --hidden-import pystray._win32 maran_launcher.py
 
       - name: Prepare assets
         run: |
