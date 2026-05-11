@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.4.2"  # release 태그와 일치시킬 것 (v2.4.2)
+__version__ = "2.4.3"  # release 태그와 일치시킬 것 (v2.4.3)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -100,6 +100,7 @@ COLOR_PROGRESS = "#ffb800"
 COLOR_ACCENT_VSCODE = "#5fafff"   # 사이안
 COLOR_ACCENT_TERM = "#00ff9c"     # 네온 그린
 COLOR_ACCENT_LLAMA = "#ffb86c"    # 오렌지 (로컬 LLM — Qwen via Ollama)
+COLOR_ACCENT_DANGER = "#ff5555"   # 빨강 (--dangerously-skip-permissions)
 COLOR_ACCENT_PLANET = "#bd93f9"   # 보라 (메인 홈페이지 행성)
 
 # 메인 홈페이지 (PLANET 버튼)
@@ -1383,6 +1384,13 @@ class MainView:
         )
         self.btn_llama.pack(side=tk.LEFT, padx=6)
 
+        # ! danger — --dangerously-skip-permissions + sonnet 모드
+        self.btn_danger = self._hack_btn(
+            exec_box, "! danger", COLOR_ACCENT_DANGER,
+            lambda: self.start("danger"),
+        )
+        self.btn_danger.pack(side=tk.LEFT, padx=6)
+
         # 우측: PLANET — 메인 홈페이지(허브) 바로 열기
         self.btn_planet = self._hack_btn(
             exec_box, "◉ PLANET", COLOR_ACCENT_PLANET,
@@ -2050,12 +2058,14 @@ class MainView:
         self.btn_vscode.config(state=tk.DISABLED)
         self.btn_term.config(state=tk.DISABLED)
         self.btn_llama.config(state=tk.DISABLED)
+        self.btn_danger.config(state=tk.DISABLED)
         for s in (self.s_tail, self.s_mac, self.s_run):
             s.pending()
         run_label = {
             "vscode": "VS Code 실행",
             "terminal": "Terminal 실행",
             "llama": "llama 대화창",
+            "danger": "danger mode (sonnet)",
         }.get(mode, "실행")
         self.s_run.label.config(text=run_label)
         threading.Thread(target=self._pipeline, args=(mode,), daemon=True).start()
@@ -2091,6 +2101,11 @@ class MainView:
                 ok = self._launch_llama()
                 fail_msg = "llama 대화창 실행 실패. 맥미니에 ollama가 설치돼있는지 확인하세요."
                 done_msg = "✅ 새 터미널 창에 라우터 REPL이 열렸습니다."
+            elif mode == "danger":
+                self.log("danger mode (claude --dangerously-skip-permissions --model sonnet) 실행 중...")
+                ok = self._launch_danger()
+                fail_msg = "danger mode 실행 실패."
+                done_msg = "✅ 새 터미널 창에 danger mode claude가 열렸습니다."
             else:
                 self.log("Terminal SSH 세션 실행 중...")
                 ok = self._launch_terminal(self.auto_claude.get())
@@ -2109,6 +2124,7 @@ class MainView:
             self.btn_vscode.config(state=tk.NORMAL)
             self.btn_term.config(state=tk.NORMAL)
             self.btn_llama.config(state=tk.NORMAL)
+            self.btn_danger.config(state=tk.NORMAL)
         except Exception as e:
             self.log(f"예기치 않은 오류: {e}")
             self._fail()
@@ -2117,6 +2133,7 @@ class MainView:
         self.btn_vscode.config(state=tk.NORMAL)
         self.btn_term.config(state=tk.NORMAL)
         self.btn_llama.config(state=tk.NORMAL)
+        self.btn_danger.config(state=tk.NORMAL)
 
     @staticmethod
     def _launch_vscode():
@@ -2258,6 +2275,47 @@ class MainView:
             cmd_str = " ".join(_cmd_quote(a) for a in ssh_args)
             subprocess.Popen(
                 f'start "MARAN llama" cmd /k {cmd_str}', shell=True,
+            )
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _launch_danger():
+        """danger mode: claude --dangerously-skip-permissions --model claude-sonnet-4-6.
+        _launch_llama 과 동일 패턴 — wt > powershell > cmd 폴백.
+        """
+        target = f"{MAC_USER}@{MAC_HOST}"
+        remote_cmd = (
+            f"cd {MAC_PROJECT_PATH_REMOTE} && "
+            f"claude --dangerously-skip-permissions --model claude-sonnet-4-6"
+        )
+        ssh_args = ["ssh", "-t", target, remote_cmd]
+
+        if shutil.which("wt"):
+            try:
+                subprocess.Popen(
+                    ["wt", "--title", "MARAN danger"] + ssh_args,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                return True
+            except Exception:
+                pass
+
+        try:
+            ps_cmd = " ".join(_ps_quote(a) for a in ssh_args)
+            subprocess.Popen(
+                ["powershell", "-NoExit", "-Command", ps_cmd],
+                creationflags=CREATE_NEW_CONSOLE,
+            )
+            return True
+        except FileNotFoundError:
+            pass
+
+        try:
+            cmd_str = " ".join(_cmd_quote(a) for a in ssh_args)
+            subprocess.Popen(
+                f'start "MARAN danger" cmd /k {cmd_str}', shell=True,
             )
             return True
         except Exception:
