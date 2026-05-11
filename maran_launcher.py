@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.5"  # release 태그와 일치시킬 것 (v2.5.5)
+__version__ = "2.5.6"  # release 태그와 일치시킬 것 (v2.5.6)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -1372,7 +1372,17 @@ class MainView:
             command=self._open_planet,
             padx=10, pady=4, anchor="w",
         )
-        self.btn_planet.pack(fill=tk.X)
+        self.btn_planet.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        self.btn_game = tk.Button(
+            planet_box, text="🎮  GAME",
+            font=FONT_MONO_BOLD, fg=COLOR_OK, bg=COLOR_PANEL,
+            activebackground=COLOR_PANEL2, activeforeground=COLOR_OK,
+            relief=tk.FLAT, bd=0, cursor="hand2",
+            command=self._open_game_direct,
+            padx=15, pady=4,
+        )
+        self.btn_game.pack(side=tk.RIGHT)
 
         self._sep(self.frame)
 
@@ -1677,6 +1687,16 @@ class MainView:
             self.log(f"PLANET 열림: {PLANET_URL}")
         except Exception as e:
             self.log(f"PLANET 열기 실패: {e}")
+
+    def _open_game_direct(self):
+        """메인 UI 게임 버튼 클릭: SMB를 통해 게임 실행."""
+        import webbrowser
+        smb_url = "file://100.122.161.94/MARAN/space_survivor/index.html"
+        try:
+            webbrowser.open(smb_url)
+            self.log("🎮 우주 생존기 실행 중...")
+        except Exception as e:
+            self.log(f"게임 실행 실패: {e}")
 
     def _refresh_conn_state(self):
         """target_bar 우측 연결 상태 라벨 갱신."""
