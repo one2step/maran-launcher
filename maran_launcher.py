@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.6"  # release 태그와 일치시킬 것 (v2.5.6)
+__version__ = "2.5.8"  # release 태그와 일치시킬 것 (v2.5.8)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -1689,11 +1689,11 @@ class MainView:
             self.log(f"PLANET 열기 실패: {e}")
 
     def _open_game_direct(self):
-        """메인 UI 게임 버튼 클릭: SMB를 통해 게임 실행."""
+        """메인 UI 게임 버튼 클릭: HTTP 서버를 통해 게임 실행."""
         import webbrowser
-        smb_url = "file://100.122.161.94/MARAN/space_survivor/index.html"
+        url = "https://maran-chat-2026.web.app/game/"
         try:
-            webbrowser.open(smb_url)
+            webbrowser.open(url)
             self.log("🎮 우주 생존기 실행 중...")
         except Exception as e:
             self.log(f"게임 실행 실패: {e}")
@@ -2789,13 +2789,8 @@ class TrayController:
 
     def _open_game(self, icon, item):
         import webbrowser
-        # Mac mini URL directly, as this is a local web game on Mac side
-        url = "http://100.122.161.94:51238/space_survivor/index.html"
-        # Or if we want to open it as a local file via SMB
-        smb_url = "file://100.122.161.94/MARAN/space_survivor/index.html"
-        # The user's request "Mac mini 내부에서 찾아보고" suggests opening it from the Mac side or SMB
-        # Since the launcher is on Windows, SMB is more direct.
-        webbrowser.open(smb_url)
+        url = "https://maran-chat-2026.web.app/game/"
+        webbrowser.open(url)
 
 
 # ============================================================
