@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.8"  # release 태그와 일치시킬 것 (v2.5.8)
+__version__ = "2.5.9"  # release 태그와 일치시킬 것 (v2.5.9)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -2607,15 +2607,30 @@ class MaranLauncher:
         try:
             self.root.deiconify()
             self.root.overrideredirect(True)
-            # 트레이 → 복귀 시에도 작업표시줄 아이콘 보장
+            # 트레이 → 복귀: taskbar 아이콘 보장(_force_taskbar_icon의 withdraw→deiconify 30ms)
+            # 이후에 전면 표시 — 80ms 딜레이로 사이클 완료 후 확실히 올림
             self.root.after(20, self._force_taskbar_icon)
+            self.root.after(80, self._raise_to_front)
+        except Exception:
+            pass
+
+    def _raise_to_front(self):
+        """창을 전면으로 올리고 포커스 획득. Win32 SetForegroundWindow 병행."""
+        try:
             self.root.lift()
-            try:
-                self.root.attributes("-topmost", True)
-                self.root.after(200, lambda: self.root.attributes("-topmost", False))
-            except Exception:
-                pass
+            self.root.attributes("-topmost", True)
+            self.root.after(200, lambda: self.root.attributes("-topmost", False))
             self.root.focus_force()
+            if os.name == "nt":
+                try:
+                    import ctypes
+                    hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                    if hwnd:
+                        SW_SHOW = 5
+                        ctypes.windll.user32.ShowWindow(hwnd, SW_SHOW)
+                        ctypes.windll.user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -2810,6 +2825,15 @@ def try_acquire_single_instance():
 
 def send_signal_to_first_instance(signal=b"SHOW"):
     """이미 떠있는 인스턴스에 신호 전송."""
+    # Windows 포그라운드 잠금 해제: 이 프로세스가 가진 전면권을 다른 프로세스에게 양도
+    # (키보드 단축키로 실행된 2번째 인스턴스만 이 권한을 가짐)
+    if os.name == "nt" and b"SHOW" in signal:
+        try:
+            import ctypes
+            ASFW_ANY = 0xFFFFFFFF
+            ctypes.windll.user32.AllowSetForegroundWindow(ASFW_ANY)
+        except Exception:
+            pass
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(2.0)
