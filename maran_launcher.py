@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.11"  # release 태그와 일치시킬 것 (v2.5.11)
+__version__ = "2.5.12"  # release 태그와 일치시킬 것 (v2.5.12)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -129,23 +129,38 @@ FONT_HEADER = ("Cascadia Mono", 9, "bold")
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 CREATE_NEW_CONSOLE = 0x00000010 if os.name == "nt" else 0
 
-_PS_FALLBACK  = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-_SSH_FALLBACK = r"C:\Windows\System32\OpenSSH\ssh.exe"
+_PS_FALLBACK   = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_SSH_DIR       = r"C:\Windows\System32\OpenSSH"
+_SSH_FALLBACK  = rf"{_SSH_DIR}\ssh.exe"
 
 
 def _find_powershell() -> str:
-    """Return powershell.exe path. shutil.which first, then hardcoded fallback."""
     return shutil.which("powershell") or _PS_FALLBACK
 
 
 def _find_ssh() -> str | None:
-    """Return ssh.exe path, or None if not found anywhere."""
     found = shutil.which("ssh")
     if found:
         return found
-    if Path(_SSH_FALLBACK).exists():
-        return _SSH_FALLBACK
-    return None
+    p = Path(_SSH_FALLBACK)
+    return str(p) if p.exists() else None
+
+
+def _find_openssh_tool(name: str) -> str | None:
+    """Find any OpenSSH tool (ssh, scp, ssh-keygen) — same dir as ssh.exe."""
+    found = shutil.which(name)
+    if found:
+        return found
+    candidate = Path(_SSH_DIR) / f"{name}.exe"
+    return str(candidate) if candidate.exists() else None
+
+
+def _find_sshkeygen() -> str | None:
+    return _find_openssh_tool("ssh-keygen")
+
+
+def _find_scp() -> str | None:
+    return _find_openssh_tool("scp")
 
 
 def check_ssh_client_installed() -> bool:
@@ -153,28 +168,65 @@ def check_ssh_client_installed() -> bool:
 
 
 def install_ssh_client(log_fn):
-    """Windows 선택적 기능 OpenSSH.Client 설치 (관리자 권한 필요)."""
-    log_fn("OpenSSH 클라이언트 설치 시도 중... (관리자 권한 필요)")
-    ps = (
-        "try { "
-        "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 -ErrorAction Stop; "
-        "Write-Host 'OK' "
-        "} catch { Write-Host ('FAIL: ' + $_) }"
+    """OpenSSH Client 3-method install: UAC elevation → winget → settings page."""
+
+    if check_ssh_client_installed():
+        return True, "이미 설치됨"
+
+    # ── Method 1: Add-WindowsCapability via UAC-elevated PowerShell ──
+    log_fn("방법 1/3: Windows 선택적 기능으로 설치 (UAC 창이 뜨면 '예' 클릭)")
+    result_file = Path(tempfile.gettempdir()) / "maran_openssh_result.txt"
+    result_file.unlink(missing_ok=True)
+
+    rf_escaped = str(result_file).replace("\\", "\\\\")
+    inner = (
+        "$cap = Get-WindowsCapability -Online -Name 'OpenSSH.Client*' -EA SilentlyContinue; "
+        "if ($cap -and $cap.State -eq 'Installed') { 'OK' | Out-File '" + rf_escaped + "' -Encoding UTF8; exit 0 } "
+        "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null; "
+        "if ($?) { 'OK' } else { 'FAIL' } | Out-File '" + rf_escaped + "' -Encoding UTF8"
     )
+    inner_tmp = Path(tempfile.gettempdir()) / "maran_openssh_inner.ps1"
+    inner_tmp.write_bytes(b"\xef\xbb\xbf" + inner.encode("utf-8"))
+
     try:
-        r = subprocess.run(
-            [_find_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-Command", ps],
-            capture_output=True, text=True, timeout=180,
+        outer = (
+            f"Start-Process powershell -Verb RunAs -Wait "
+            f"-ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{inner_tmp}\"'"
+        )
+        subprocess.run(
+            [_find_powershell(), "-NoProfile", "-Command", outer],
+            timeout=180, creationflags=CREATE_NO_WINDOW,
+        )
+        if result_file.exists() and "OK" in result_file.read_text(encoding="utf-8", errors="ignore"):
+            _refresh_path_from_registry()
+            if check_ssh_client_installed():
+                return True, "OpenSSH Client 설치 완료 (선택적 기능)"
+    except Exception as e:
+        log_fn(f"  방법1 오류: {e}")
+
+    # ── Method 2: winget ──
+    log_fn("방법 2/3: winget으로 설치 시도...")
+    try:
+        ok, msg = winget_install("Microsoft.OpenSSH.Beta", log_fn)
+        _refresh_path_from_registry()
+        if check_ssh_client_installed():
+            return True, "OpenSSH Client 설치 완료 (winget)"
+    except Exception as e:
+        log_fn(f"  방법2 오류: {e}")
+
+    # ── Method 3: open Settings page ──
+    log_fn("방법 3/3: 설정 창 자동 열기 → 수동 설치")
+    try:
+        subprocess.Popen(
+            [_find_powershell(), "-NoProfile", "-Command",
+             "Start-Process 'ms-settings:optionalfeatures'"],
             creationflags=CREATE_NO_WINDOW,
         )
-        out = (r.stdout or "") + (r.stderr or "")
-        if "OK" in out and check_ssh_client_installed():
-            return True, "OpenSSH Client 설치 완료"
-        log_fn("자동 설치 실패. 수동 설치: 설정 > 앱 > 선택적 기능 > OpenSSH 클라이언트 추가")
-        return False, "수동 설치 필요: 설정 > 앱 > 선택적 기능 > OpenSSH 클라이언트"
-    except Exception as e:
-        return False, str(e)
+        log_fn("  설정 > 앱 > 선택적 기능 > '기능 추가' > 'OpenSSH 클라이언트' 검색 > 설치")
+        log_fn("  설치 완료 후 '🔄 새로고침' 클릭")
+    except Exception:
+        log_fn("  수동: 설정 > 앱 > 선택적 기능 > OpenSSH 클라이언트")
+    return False, "수동 설치 후 새로고침 필요"
 
 
 # ============================================================
@@ -811,12 +863,14 @@ def upload_file_to_mac(local_path, log_fn=None, source="file"):
     if not check_mac_reachable():
         return False, "Mac mini 도달 불가 (Tailscale 점검)"
 
+    scp = _find_scp()
+    if not scp:
+        return False, "scp 없음. OpenSSH 클라이언트 설치 필요"
     target = f"{MAC_USER}@{MAC_HOST}:{INBOX_REMOTE_DIR}/"
     try:
         ensure_inbox_dir()
         r = subprocess.run(
-            ["scp", "-B", "-o", "ConnectTimeout=10",
-             str(p), target],
+            [scp, "-B", "-o", "ConnectTimeout=10", str(p), target],
             capture_output=True, text=True, timeout=180,
             creationflags=CREATE_NO_WINDOW,
         )
@@ -824,8 +878,6 @@ def upload_file_to_mac(local_path, log_fn=None, source="file"):
             log_inbox_upload(p.name, source=source)
             return True, f"업로드 완료: {p.name}"
         return False, (r.stderr or r.stdout or "scp 실패")[:200].strip()
-    except FileNotFoundError:
-        return False, "scp 없음. OpenSSH 클라이언트 설치 필요"
     except Exception as e:
         return False, str(e)
 
@@ -886,19 +938,34 @@ def open_tailscale_app(log_fn):
     candidates = [
         r"C:\Program Files\Tailscale\Tailscale.exe",
         r"C:\Program Files (x86)\Tailscale\Tailscale.exe",
+        str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Tailscale" / "Tailscale.exe"),
+        shutil.which("Tailscale") or "",
+        shutil.which("tailscale") or "",
     ]
     for p in candidates:
-        if Path(p).exists():
+        if p and Path(p).exists():
             try:
                 subprocess.Popen([p])
-                log_fn("Tailscale 앱 실행. 로그인 후 '🔄 새로고침' 클릭하세요.")
+                log_fn("Tailscale 앱 실행됨. 로그인 후 '🔄 새로고침' 클릭하세요.")
                 return True, "Tailscale 앱 띄움"
             except Exception:
                 pass
-    return False, "Tailscale 실행 파일을 찾지 못함. 먼저 설치하세요."
+    # Fallback: open via shell protocol
+    try:
+        os.startfile("tailscale:")
+        log_fn("Tailscale 앱 실행됨 (쉘 프로토콜). 로그인 후 새로고침.")
+        return True, "Tailscale 앱 띄움"
+    except Exception:
+        pass
+    log_fn("Tailscale 실행 실패. 설치를 먼저 완료하세요.")
+    return False, "Tailscale 실행 불가 — 설치 후 재시도"
 
 
 def generate_ssh_key(log_fn):
+    keygen = _find_sshkeygen()
+    if not keygen:
+        log_fn("ssh-keygen 없음 → OpenSSH 클라이언트 먼저 설치하세요")
+        return False, "OpenSSH 클라이언트 미설치 (위 단계 먼저)"
     home = Path.home()
     ssh_dir = home / ".ssh"
     ssh_dir.mkdir(exist_ok=True)
@@ -909,16 +976,13 @@ def generate_ssh_key(log_fn):
     log_fn(f"SSH 키 생성 중: {key_path}")
     try:
         r = subprocess.run(
-            ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", ""],
+            [keygen, "-t", "ed25519", "-f", str(key_path), "-N", ""],
             capture_output=True, text=True, timeout=15,
             creationflags=CREATE_NO_WINDOW,
         )
         if r.returncode == 0:
             return True, "생성 완료"
         return False, (r.stderr or r.stdout or "")[:200]
-    except FileNotFoundError:
-        return False, ("ssh-keygen 없음. 설정 > 앱 > 선택적 기능에서 "
-                       "'OpenSSH 클라이언트' 추가 필요.")
     except Exception as e:
         return False, str(e)
 
@@ -1095,8 +1159,8 @@ class PrereqRow:
 
         self.button = tk.Button(
             self.frame, text=action_label, font=("맑은 고딕", 9),
-            bg=COLOR_BTN_INSTALL, fg="#1e1e2e",
-            activebackground=COLOR_BTN_INSTALL_HOVER,
+            bg=COLOR_BTN_INSTALL, fg=COLOR_FG,
+            activebackground=COLOR_BTN_INSTALL_HOVER, activeforeground=COLOR_OK,
             relief=tk.FLAT, bd=0, cursor="hand2",
             padx=12, pady=2, width=10,
         )
@@ -1124,7 +1188,7 @@ class PrereqRow:
             )
             self.button.config(
                 state=tk.NORMAL, text=self.action_label,
-                bg=COLOR_BTN_INSTALL, fg="#1e1e2e",
+                bg=COLOR_BTN_INSTALL, fg=COLOR_FG,
             )
         return ok
 
@@ -1142,10 +1206,31 @@ class SetupView:
         self.on_continue = on_continue
         self.frame = tk.Frame(parent, bg=COLOR_BG)
         self.rows = {}
+        self._drag_x = self._drag_y = 0
         self._build()
+        self.frame.after(0, lambda: self._bind_drag_recursive(self.frame))
 
     def pack(self, **kw): self.frame.pack(**kw)
     def pack_forget(self): self.frame.pack_forget()
+
+    def _drag_start(self, event):
+        root = self.frame.master
+        self._drag_x = event.x_root - root.winfo_x()
+        self._drag_y = event.y_root - root.winfo_y()
+
+    def _drag_move(self, event):
+        try:
+            root = self.frame.master
+            root.geometry(f"+{event.x_root - self._drag_x}+{event.y_root - self._drag_y}")
+        except Exception:
+            pass
+
+    def _bind_drag_recursive(self, widget):
+        if not isinstance(widget, tk.Button):
+            widget.bind("<ButtonPress-1>", self._drag_start, add="+")
+            widget.bind("<B1-Motion>",     self._drag_move,  add="+")
+        for child in widget.winfo_children():
+            self._bind_drag_recursive(child)
 
     def _build(self):
         tk.Label(
@@ -1207,8 +1292,8 @@ class SetupView:
         tk.Button(
             btns, text="🚀 모두 자동 설치",
             font=("맑은 고딕", 10, "bold"),
-            bg=COLOR_BTN_INSTALL, fg="#1e1e2e",
-            activebackground=COLOR_BTN_INSTALL_HOVER,
+            bg=COLOR_BTN_INSTALL, fg=COLOR_OK,
+            activebackground=COLOR_BTN_INSTALL_HOVER, activeforeground=COLOR_OK,
             relief=tk.FLAT, bd=0, cursor="hand2",
             command=self.install_all,
             padx=14, pady=6,
@@ -1217,8 +1302,8 @@ class SetupView:
         self.continue_btn = tk.Button(
             btns, text="메인으로  ➜",
             font=("맑은 고딕", 10, "bold"),
-            bg=COLOR_BTN_VSCODE, fg="#1e1e2e",
-            activebackground=COLOR_BTN_VSCODE_HOVER,
+            bg=COLOR_BTN_VSCODE, fg=COLOR_FG,
+            activebackground=COLOR_BTN_VSCODE_HOVER, activeforeground=COLOR_OK,
             relief=tk.FLAT, bd=0, cursor="hand2",
             command=self.on_continue,
             padx=14, pady=6,
@@ -1257,9 +1342,11 @@ class SetupView:
                 all_required_ok = False
 
         if all_required_ok:
-            self.continue_btn.config(text="✅ 메인으로  ➜", bg=COLOR_OK)
+            self.continue_btn.config(text="✅ 메인으로  ➜", bg=COLOR_OK,
+                                     fg="#0a0a0a", activeforeground="#0a0a0a")
         else:
-            self.continue_btn.config(text="메인으로  ➜", bg=COLOR_BTN_VSCODE)
+            self.continue_btn.config(text="메인으로  ➜", bg=COLOR_BTN_VSCODE,
+                                     fg=COLOR_FG)
         return all_required_ok
 
     def _action(self, row, install_fn):
@@ -1285,38 +1372,82 @@ class SetupView:
     def install_all(self):
         threading.Thread(target=self._install_all_thread, daemon=True).start()
 
-    def _install_all_thread(self):
-        self.log("\n=== 전체 자동 설치 시작 ===")
-        # 사용자 입력 없이 가능한 항목들만 자동 실행
-        sequence = [
-            ("tailscale_install", install_tailscale),
-            ("vscode", install_vscode),
-            ("wt", install_windows_terminal),
-            ("remote_ssh", install_remote_ssh_extension),
-            ("ssh_key", generate_ssh_key),
-        ]
-        for key, fn in sequence:
-            row = self.rows[key]
-            if row.check_fn():
-                self.log(f"⏭  {row.name}: 이미 OK")
-                continue
+    def _run_step(self, key, fn):
+        """단일 prereq 실행. (ok, msg) 반환."""
+        row = self.rows.get(key)
+        if row and row.check_fn():
+            self.log(f"  ⏭  {row.name}: 이미 OK")
+            return True, "OK"
+        if row:
             row.set_busy()
-            self.log(f"\n▶ {row.name}")
-            try:
-                result = fn(self.log)
-                if isinstance(result, tuple):
-                    ok, msg = result
-                else:
-                    ok, msg = bool(result), ""
-                self.log(("✅ " if ok else "❌ ") + (msg or ("완료" if ok else "실패")))
-            except Exception as e:
-                self.log(f"❌ 오류: {e}")
-            time.sleep(0.4)
+        self.log(f"\n▶ {row.name if row else key}")
+        try:
+            result = fn(self.log)
+            ok, msg = result if isinstance(result, tuple) else (bool(result), "")
+            self.log(("  ✅ " if ok else "  ❌ ") + (msg or ("완료" if ok else "실패")))
+            return ok, msg
+        except Exception as e:
+            self.log(f"  ❌ 오류: {e}")
+            return False, str(e)
 
-        self.log("\n=== 자동 설치 종료 ===")
-        self.log("👉 다음 단계는 수동입니다:")
-        self.log("   1) 'Tailscale 열기' → 앱에서 로그인 → '새로고침'")
-        self.log("   2) '등록' → 새 PowerShell 창에서 비번 1회 입력 → '새로고침'")
+    def _install_all_thread(self):
+        self.log("\n══════════════════════════════════")
+        self.log("  🚀 원클릭 전체 설치 시작")
+        self.log("══════════════════════════════════")
+
+        # ── Phase 1: 완전 자동 (UAC만 클릭) ──
+        self.log("\n[ Phase 1 / 3 ]  자동 설치 (UAC 창 뜨면 '예' 클릭)")
+
+        self._run_step("tailscale_install", install_tailscale)
+        self._run_step("openssh",           install_ssh_client)
+
+        # OpenSSH 설치 후 PATH 갱신
+        _refresh_path_from_registry()
+
+        self._run_step("ssh_key",           generate_ssh_key)
+        self._run_step("vscode",            install_vscode)
+        self._run_step("wt",                install_windows_terminal)
+        self._run_step("remote_ssh",        install_remote_ssh_extension)
+
+        self.refresh_all()
+
+        # ── Phase 2: Tailscale 로그인 대기 ──
+        self.log("\n[ Phase 2 / 3 ]  Tailscale 로그인")
+        if not check_mac_reachable():
+            open_tailscale_app(self.log)
+            self.log("  ⏳ 맥미니 연결 대기 중... (로그인 완료 후 자동 진행)")
+            for _ in range(60):          # 최대 2분 대기
+                time.sleep(2)
+                if check_mac_reachable():
+                    self.log("  ✅ 맥미니 연결됨!")
+                    break
+            else:
+                self.log("  ⚠  2분 안에 연결 안 됨. '새로고침' 후 '등록' 직접 클릭하세요.")
+                self.refresh_all()
+                return
+        else:
+            self.log("  ⏭  맥미니 이미 연결됨")
+
+        # ── Phase 3: SSH 키 등록 (비번 1회) ──
+        self.log("\n[ Phase 3 / 3 ]  맥미니 무비번 SSH 등록")
+        if check_ssh_no_password():
+            self.log("  ⏭  이미 무비번 SSH OK")
+        else:
+            self.log("  → PowerShell 창이 열립니다. 맥 비밀번호 1회 입력 후 Enter.")
+            self._run_step("ssh_no_pw", push_ssh_key_to_mac)
+            # 최대 3분 대기 (PS 창에서 비번 입력 대기)
+            self.log("  ⏳ 비밀번호 입력 완료 대기 중... (창 닫히면 자동 진행)")
+            for _ in range(90):
+                time.sleep(2)
+                if check_ssh_no_password():
+                    self.log("  ✅ 무비번 SSH 등록 완료!")
+                    break
+            else:
+                self.log("  ⚠  3분 초과. '새로고침' 후 상태 확인하세요.")
+
+        self.log("\n══════════════════════════════════")
+        self.log("  설치 완료. '메인으로 ➜' 클릭!")
+        self.log("══════════════════════════════════\n")
         self.refresh_all()
 
 
@@ -1715,6 +1846,10 @@ class MainView:
         # 시작 시 연결 상태 빠른 체크 (target_bar의 conn_state)
         threading.Thread(target=self._refresh_conn_state, daemon=True).start()
 
+        # 전체 프레임에 드래그 바인딩 (Button 제외 — 클릭 보존)
+        # after() 로 미뤄서 모든 자식 위젯이 생성된 뒤 실행
+        self.frame.after(0, lambda: self._bind_drag_recursive(self.frame))
+
     # ────────────────────────────────────────────────────────────
     # UI 헬퍼들
     # ────────────────────────────────────────────────────────────
@@ -1794,6 +1929,14 @@ class MainView:
             self.frame.master.geometry(f"+{x}+{y}")
         except Exception:
             pass
+
+    def _bind_drag_recursive(self, widget):
+        """Label·Frame 위젯에 드래그 바인딩 (Button 제외 — 클릭 동작 보존)."""
+        if not isinstance(widget, tk.Button):
+            widget.bind("<ButtonPress-1>", self._drag_start, add="+")
+            widget.bind("<B1-Motion>",     self._drag_move,  add="+")
+        for child in widget.winfo_children():
+            self._bind_drag_recursive(child)
 
     def _on_minimize(self):
         """[_] 클릭 → 작업표시줄로 최소화 (frameless에선 OS 윈도우 hide+iconify 트릭)."""

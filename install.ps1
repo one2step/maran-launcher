@@ -37,7 +37,7 @@ Get-ChildItem -Path $INSTALL_DIR -Filter "*.exe" -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -ne $EXE_LOCAL } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
-Write-Host "  [1/3] Install folder ready    " -NoNewline
+Write-Host "  [1/6] Install folder ready    " -NoNewline
 Write-Host "OK" -ForegroundColor Green
 Write-Host "        $INSTALL_DIR" -ForegroundColor DarkGray
 
@@ -53,7 +53,7 @@ if ($running) {
     Write-Host "OK" -ForegroundColor Green
 }
 
-Write-Host "  [2/3] Downloading exe         " -NoNewline
+Write-Host "  [2/6] Downloading exe         " -NoNewline
 try {
     Invoke-WebRequest -Uri $EXE_URL -OutFile $exePath -UseBasicParsing
     $size = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
@@ -111,17 +111,66 @@ foreach ($lnk in @($desktopLnk, $startLnk)) {
     $sc.Description      = "Connect to Mac MARAN folder via VS Code or Terminal"
     $sc.Save()
 }
-Write-Host "  [3/3] Shortcut + hotkey       " -NoNewline
+Write-Host "  [3/6] Shortcut + hotkey       " -NoNewline
 Write-Host "OK (Ctrl+Alt+M)" -ForegroundColor Green
 
-Write-Host ""
-Write-Host "  Done." -ForegroundColor Green
 Write-Host "  Installed: $exePath" -ForegroundColor DarkGray
 Write-Host "  Shortcut : Desktop + Start Menu" -ForegroundColor DarkGray
 Write-Host "  Hotkey   : Ctrl + Alt + M" -ForegroundColor DarkGray
 Write-Host ""
 
-# MARAN_QUIET=1 → 인터랙티브 프롬프트 스킵 + 자동 실행 (auto-update 흐름용)
+# ===========================================================
+# [4/6] OpenSSH Client
+# ===========================================================
+Write-Host "  [4/6] Checking OpenSSH Client    " -NoNewline
+$sshExe = "$env:SystemRoot\System32\OpenSSH\ssh.exe"
+if (Test-Path $sshExe) {
+    Write-Host "OK (already)" -ForegroundColor Green
+} else {
+    Write-Host "installing..." -ForegroundColor Yellow
+    try {
+        $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Client*' -ErrorAction Stop
+        if ($cap.State -ne 'Installed') {
+            Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null
+        }
+        if (Test-Path $sshExe) {
+            Write-Host "        OK" -ForegroundColor Green
+        } else {
+            Write-Host "        FAIL (run launcher → OpenSSH step)" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "        FAIL (needs admin — launcher will retry)" -ForegroundColor Red
+    }
+}
+
+# ===========================================================
+# [5/6] SSH key
+# ===========================================================
+Write-Host "  [5/6] SSH key (id_ed25519)        " -NoNewline
+$keyPath = "$env:USERPROFILE\.ssh\id_ed25519"
+if (Test-Path $keyPath) {
+    Write-Host "OK (already)" -ForegroundColor Green
+} else {
+    $sshKeygen = "$env:SystemRoot\System32\OpenSSH\ssh-keygen.exe"
+    if (-not (Test-Path $sshKeygen)) { $sshKeygen = (Get-Command ssh-keygen -EA SilentlyContinue)?.Source }
+    if ($sshKeygen -and (Test-Path $sshKeygen)) {
+        New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
+        & $sshKeygen -t ed25519 -f $keyPath -N '""' 2>$null | Out-Null
+        if (Test-Path $keyPath) { Write-Host "OK (generated)" -ForegroundColor Green }
+        else { Write-Host "FAIL (launcher will retry)" -ForegroundColor Red }
+    } else {
+        Write-Host "SKIP (OpenSSH not ready — launcher will handle)" -ForegroundColor DarkGray
+    }
+}
+
+# ===========================================================
+# [6/6] Launch
+# ===========================================================
+Write-Host ""
+Write-Host "  Done." -ForegroundColor Green
+Write-Host ""
+
+# MARAN_QUIET=1 → auto-update flow (no prompt)
 if ($env:MARAN_QUIET -eq "1") {
     Start-Process -FilePath $exePath
     Write-Host "  [auto] Relaunched." -ForegroundColor Green
@@ -129,7 +178,7 @@ if ($env:MARAN_QUIET -eq "1") {
     $run = Read-Host "  Run now? (Y/n)"
     if ($run -ne "n" -and $run -ne "N") {
         Start-Process -FilePath $exePath
-        Write-Host "  Launched. First run will show the setup screen." -ForegroundColor Cyan
+        Write-Host "  Launched. Click [모두 자동 설치] inside the launcher." -ForegroundColor Cyan
     }
 }
 Write-Host ""
