@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.9"  # release 태그와 일치시킬 것 (v2.5.9)
+__version__ = "2.5.10"  # release 태그와 일치시킬 것 (v2.5.10)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -128,6 +128,13 @@ FONT_HEADER = ("Cascadia Mono", 9, "bold")
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 CREATE_NEW_CONSOLE = 0x00000010 if os.name == "nt" else 0
+
+_PS_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+
+def _find_powershell() -> str:
+    """Return powershell.exe path. shutil.which first, then hardcoded fallback."""
+    return shutil.which("powershell") or _PS_FALLBACK
 
 
 # ============================================================
@@ -324,7 +331,7 @@ def install_winget(log_fn):
             "-Register \"$($_.InstallLocation)\\AppXManifest.xml\" }"
         )
         subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps1],
+            [_find_powershell(), "-NoProfile", "-Command", ps1],
             capture_output=True, text=True, timeout=60,
             creationflags=CREATE_NO_WINDOW,
         )
@@ -348,7 +355,7 @@ def install_winget(log_fn):
             "'OK'"
         )
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            [_find_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-Command", ps2],
             capture_output=True, text=True, timeout=300,
             creationflags=CREATE_NO_WINDOW,
@@ -398,7 +405,7 @@ def _ps_download(url, out_path, log_fn, timeout=300):
         f"Invoke-WebRequest -Uri '{url}' -OutFile '{out_path}' -UseBasicParsing"
     )
     r = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps],
+        [_find_powershell(), "-NoProfile", "-Command", ps],
         capture_output=True, text=True, timeout=timeout,
         creationflags=CREATE_NO_WINDOW,
     )
@@ -669,7 +676,7 @@ Start-Sleep -Seconds 3
 
     try:
         subprocess.Popen(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(tmp)],
+            [_find_powershell(), "-ExecutionPolicy", "Bypass", "-File", str(tmp)],
             creationflags=CREATE_NEW_CONSOLE,
         )
         if log_fn:
@@ -913,7 +920,7 @@ Read-Host 'Press Enter to close'
 
     try:
         subprocess.Popen(
-            ["powershell", "-NoExit", "-ExecutionPolicy", "Bypass",
+            [_find_powershell(), "-NoExit", "-ExecutionPolicy", "Bypass",
              "-File", str(tmp)],
             creationflags=CREATE_NEW_CONSOLE,
         )
@@ -2334,7 +2341,7 @@ class MainView:
         try:
             ps_cmd = " ".join(_ps_quote(a) for a in ssh_args)
             subprocess.Popen(
-                ["powershell", "-NoExit", "-Command", ps_cmd],
+                [_find_powershell(), "-NoExit", "-Command", ps_cmd],
                 creationflags=CREATE_NEW_CONSOLE,
             )
             return True
@@ -2376,7 +2383,7 @@ class MainView:
         try:
             ps_cmd = " ".join(_ps_quote(a) for a in ssh_args)
             subprocess.Popen(
-                ["powershell", "-NoExit", "-Command", ps_cmd],
+                [_find_powershell(), "-NoExit", "-Command", ps_cmd],
                 creationflags=CREATE_NEW_CONSOLE,
             )
             return True
@@ -2417,7 +2424,7 @@ class MainView:
         try:
             ps_cmd = " ".join(_ps_quote(a) for a in ssh_args)
             subprocess.Popen(
-                ["powershell", "-NoExit", "-Command", ps_cmd],
+                [_find_powershell(), "-NoExit", "-Command", ps_cmd],
                 creationflags=CREATE_NEW_CONSOLE,
             )
             return True
@@ -2458,7 +2465,7 @@ class MainView:
         try:
             ps_cmd = " ".join(_ps_quote(a) for a in ssh_args)
             subprocess.Popen(
-                ["powershell", "-NoExit", "-Command", ps_cmd],
+                [_find_powershell(), "-NoExit", "-Command", ps_cmd],
                 creationflags=CREATE_NEW_CONSOLE,
             )
             return True
