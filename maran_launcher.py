@@ -28,7 +28,7 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 5
 
 # === 자동 업데이트 ===
-__version__ = "2.5.10"  # release 태그와 일치시킬 것 (v2.5.10)
+__version__ = "2.5.11"  # release 태그와 일치시킬 것 (v2.5.11)
 GITHUB_REPO = "one2step/maran-launcher"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/i.ps1"
@@ -129,12 +129,52 @@ FONT_HEADER = ("Cascadia Mono", 9, "bold")
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 CREATE_NEW_CONSOLE = 0x00000010 if os.name == "nt" else 0
 
-_PS_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_PS_FALLBACK  = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_SSH_FALLBACK = r"C:\Windows\System32\OpenSSH\ssh.exe"
 
 
 def _find_powershell() -> str:
     """Return powershell.exe path. shutil.which first, then hardcoded fallback."""
     return shutil.which("powershell") or _PS_FALLBACK
+
+
+def _find_ssh() -> str | None:
+    """Return ssh.exe path, or None if not found anywhere."""
+    found = shutil.which("ssh")
+    if found:
+        return found
+    if Path(_SSH_FALLBACK).exists():
+        return _SSH_FALLBACK
+    return None
+
+
+def check_ssh_client_installed() -> bool:
+    return _find_ssh() is not None
+
+
+def install_ssh_client(log_fn):
+    """Windows 선택적 기능 OpenSSH.Client 설치 (관리자 권한 필요)."""
+    log_fn("OpenSSH 클라이언트 설치 시도 중... (관리자 권한 필요)")
+    ps = (
+        "try { "
+        "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 -ErrorAction Stop; "
+        "Write-Host 'OK' "
+        "} catch { Write-Host ('FAIL: ' + $_) }"
+    )
+    try:
+        r = subprocess.run(
+            [_find_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-Command", ps],
+            capture_output=True, text=True, timeout=180,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        if "OK" in out and check_ssh_client_installed():
+            return True, "OpenSSH Client 설치 완료"
+        log_fn("자동 설치 실패. 수동 설치: 설정 > 앱 > 선택적 기능 > OpenSSH 클라이언트 추가")
+        return False, "수동 설치 필요: 설정 > 앱 > 선택적 기능 > OpenSSH 클라이언트"
+    except Exception as e:
+        return False, str(e)
 
 
 # ============================================================
@@ -297,8 +337,11 @@ def check_ssh_key():
 def check_ssh_no_password():
     if not check_mac_reachable():
         return False
+    ssh = _find_ssh()
+    if not ssh:
+        return False
     cmd = [
-        "ssh", "-o", "BatchMode=yes",
+        ssh, "-o", "BatchMode=yes",
         "-o", f"ConnectTimeout={CONNECT_TIMEOUT}",
         "-o", "StrictHostKeyChecking=accept-new",
         f"{MAC_USER}@{MAC_HOST}", "echo", "ok",
@@ -608,7 +651,7 @@ def fetch_outbox_index():
         return []
     try:
         r = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+            [_find_ssh(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
              f"{MAC_USER}@{MAC_HOST}",
              f"cat {OUTBOX_INDEX_REMOTE} 2>/dev/null || echo '[]'"],
             capture_output=True, text=True, timeout=10,
@@ -690,7 +733,7 @@ def ensure_inbox_dir():
     """Mac mini에 ~/MARAN/inbox/ + ~/MARAN/outbox/ + ~/MARAN/shared/ 폴더 보장."""
     try:
         subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+            [_find_ssh(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
              f"{MAC_USER}@{MAC_HOST}",
              f"mkdir -p {INBOX_REMOTE_DIR} {OUTBOX_REMOTE_DIR} {SHARED_REMOTE_DIR}"],
             capture_output=True, timeout=10,
@@ -889,9 +932,28 @@ def push_ssh_key_to_mac(log_fn):
 
     # PowerShell 스크립트 생성 (ASCII only, PS 5.1 호환).
     # echo '<key>' >> 방식: pipe 인코딩 이슈 회피.
+    ssh_exe = _find_ssh() or _SSH_FALLBACK
     pub_path_safe = str(pub).replace("'", "''")
     script = f"""
 $ErrorActionPreference = 'Stop'
+Write-Host ''
+
+# Find ssh.exe (OpenSSH Client)
+$sshExe = $null
+foreach ($candidate in @('{ssh_exe}', "$env:SystemRoot\\System32\\OpenSSH\\ssh.exe")) {{
+    if (Test-Path $candidate) {{ $sshExe = $candidate; break }}
+}}
+if (-not $sshExe) {{
+    $found = Get-Command ssh -ErrorAction SilentlyContinue
+    if ($found) {{ $sshExe = $found.Source }}
+}}
+if (-not $sshExe) {{
+    Write-Host '[ERR] ssh.exe not found.' -ForegroundColor Red
+    Write-Host '      Install: Settings > Apps > Optional features > OpenSSH Client' -ForegroundColor DarkGray
+    Write-Host '      Or run:  Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0' -ForegroundColor DarkGray
+    Read-Host 'Press Enter to close'; exit 1
+}}
+Write-Host "  ssh: $sshExe" -ForegroundColor DarkGray
 Write-Host ''
 Write-Host 'Enter Mac password ONCE when prompted.' -ForegroundColor Yellow
 Write-Host '(After this, SSH will work without password.)' -ForegroundColor DarkGray
@@ -900,7 +962,7 @@ Write-Host ''
 $pub = (Get-Content -LiteralPath '{pub_path_safe}' -Raw).Trim()
 $cmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '$pub' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
 
-ssh -o StrictHostKeyChecking=accept-new {MAC_USER}@{MAC_HOST} $cmd
+& $sshExe -o StrictHostKeyChecking=accept-new {MAC_USER}@{MAC_HOST} $cmd
 $ok = $LASTEXITCODE -eq 0
 
 Write-Host ''
@@ -1107,6 +1169,8 @@ class SetupView:
              check_tailscale_installed, install_tailscale, "설치", True),
             ("tailscale_login", "Tailscale 로그인 (맥미니 도달)",
              check_mac_reachable, open_tailscale_app, "Tailscale 열기", True),
+            ("openssh", "OpenSSH 클라이언트 (ssh.exe)",
+             check_ssh_client_installed, install_ssh_client, "설치", True),
             ("ssh_key", "SSH 키 생성",
              check_ssh_key, generate_ssh_key, "생성", True),
             ("ssh_no_pw", "맥미니 무비번 SSH",
@@ -2324,9 +2388,9 @@ class MainView:
         target = f"{MAC_USER}@{MAC_HOST}"
         if run_claude:
             remote_cmd = f"cd {MAC_PROJECT_PATH_REMOTE} && claude"
-            ssh_args = ["ssh", "-t", target, remote_cmd]
+            ssh_args = [_find_ssh(), "-t", target, remote_cmd]
         else:
-            ssh_args = ["ssh", target]
+            ssh_args = [_find_ssh(), target]
 
         if shutil.which("wt"):
             try:
@@ -2368,7 +2432,7 @@ class MainView:
             f"cd {MAC_PROJECT_PATH_REMOTE} && "
             f"python3 scripts/maran_chat.py"
         )
-        ssh_args = ["ssh", "-t", target, remote_cmd]
+        ssh_args = [_find_ssh(), "-t", target, remote_cmd]
 
         if shutil.which("wt"):
             try:
@@ -2409,7 +2473,7 @@ class MainView:
             f"cd {MAC_PROJECT_PATH_REMOTE} && "
             f"claude --dangerously-skip-permissions --model claude-sonnet-4-6"
         )
-        ssh_args = ["ssh", "-t", target, remote_cmd]
+        ssh_args = [_find_ssh(), "-t", target, remote_cmd]
 
         if shutil.which("wt"):
             try:
@@ -2450,7 +2514,7 @@ class MainView:
             f"cd {MAC_PROJECT_PATH_REMOTE} && "
             f"GEMINI_CLI_TRUST_WORKSPACE=true gemini"
         )
-        ssh_args = ["ssh", "-t", target, remote_cmd]
+        ssh_args = [_find_ssh(), "-t", target, remote_cmd]
 
         if shutil.which("wt"):
             try:
