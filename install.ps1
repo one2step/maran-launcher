@@ -2,13 +2,16 @@
 # Maran Launcher - Installer (ASCII-only for PS 5.1 compatibility)
 #
 # Usage:
-#   PowerShell:  irm bit.ly/<alias> | iex
-#   cmd:         powershell -c "irm bit.ly/<alias>|iex"
+#   PowerShell:  irm bit.ly/maran44 | iex
+#   cmd:         powershell -c "irm bit.ly/maran44|iex"
 #
-# What it does:
-#   1) Downloads latest exe to %LOCALAPPDATA%\Programs\MaranLauncher\
-#   2) Creates Desktop + Start Menu shortcut with Ctrl+Alt+M hotkey
-#   3) Optionally launches it
+# Steps:
+#   1) Creates install folder
+#   2) Downloads latest MaranLauncher.exe
+#   3) Creates Desktop + Start Menu shortcut with Ctrl+Alt+M hotkey
+#   4) Checks / installs OpenSSH Client (Windows optional feature)
+#   5) Generates SSH key (id_ed25519) if missing
+#   6) Launches the exe
 # =============================================================
 
 $ErrorActionPreference = "Stop"
@@ -30,9 +33,11 @@ Write-Host "  M  Maran Launcher Installer" -ForegroundColor Cyan
 Write-Host "  ---------------------------" -ForegroundColor DarkGray
 Write-Host ""
 
-# 1) Install directory
+# ===========================================================
+# [1/6] Install directory
+# ===========================================================
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
-# Clean up any leftover files with garbled names from previous broken installs
+# Clean up leftover files with garbled names from previous broken installs
 Get-ChildItem -Path $INSTALL_DIR -Filter "*.exe" -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -ne $EXE_LOCAL } |
     Remove-Item -Force -ErrorAction SilentlyContinue
@@ -41,10 +46,12 @@ Write-Host "  [1/6] Install folder ready    " -NoNewline
 Write-Host "OK" -ForegroundColor Green
 Write-Host "        $INSTALL_DIR" -ForegroundColor DarkGray
 
-# 2) Download exe
+# ===========================================================
+# [2/6] Download exe
+# ===========================================================
 $exePath = Join-Path $INSTALL_DIR $EXE_LOCAL
 
-# Stop any running launcher (so the .exe isn't locked during overwrite)
+# Stop any running launcher so the .exe is not locked during overwrite
 $running = Get-Process -Name "MaranLauncher" -ErrorAction SilentlyContinue
 if ($running) {
     Write-Host "  [*] Stopping running launcher " -NoNewline
@@ -65,10 +72,12 @@ try {
     exit 1
 }
 
-# 3) Create shortcuts with Ctrl+Alt+M
+# ===========================================================
+# [3/6] Create shortcuts with Ctrl+Alt+M
+# ===========================================================
 $WshShell = New-Object -ComObject WScript.Shell
 
-# Maximum reliability: Get actual paths from registry (handles OneDrive redirection)
+# Get actual paths from registry (handles OneDrive redirection)
 function Get-SpecialFolder($name) {
     $path = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -ErrorAction SilentlyContinue).$name
     if ($null -eq $path) {
@@ -83,7 +92,6 @@ function Get-SpecialFolder($name) {
 $desktopDir   = Get-SpecialFolder "Desktop"
 $startMenuDir = Get-SpecialFolder "Programs"
 
-# Fallback to defaults if registry lookup fails
 if ($null -eq $desktopDir -or !(Test-Path $desktopDir)) {
     $desktopDir = Join-Path $env:USERPROFILE "Desktop"
 }
@@ -120,46 +128,58 @@ Write-Host "  Hotkey   : Ctrl + Alt + M" -ForegroundColor DarkGray
 Write-Host ""
 
 # ===========================================================
-# [4/6] OpenSSH Client
+# [4/6] OpenSSH Client (Windows optional feature)
 # ===========================================================
-Write-Host "  [4/6] Checking OpenSSH Client    " -NoNewline
+Write-Host "  [4/6] OpenSSH Client          " -NoNewline
 $sshExe = "$env:SystemRoot\System32\OpenSSH\ssh.exe"
 if (Test-Path $sshExe) {
-    Write-Host "OK (already)" -ForegroundColor Green
+    Write-Host "OK (already installed)" -ForegroundColor Green
 } else {
     Write-Host "installing..." -ForegroundColor Yellow
     try {
-        $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Client*' -ErrorAction Stop
-        if ($cap.State -ne 'Installed') {
+        $cap = Get-WindowsCapability -Online -Name "OpenSSH.Client*" -ErrorAction Stop
+        if ($cap.State -ne "Installed") {
             Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null
         }
         if (Test-Path $sshExe) {
             Write-Host "        OK" -ForegroundColor Green
         } else {
-            Write-Host "        FAIL (run launcher → OpenSSH step)" -ForegroundColor Red
+            Write-Host "        FAIL - run launcher and click OpenSSH install" -ForegroundColor Red
         }
     } catch {
-        Write-Host "        FAIL (needs admin — launcher will retry)" -ForegroundColor Red
+        Write-Host "        FAIL (needs admin) - launcher will retry" -ForegroundColor Red
     }
 }
 
 # ===========================================================
-# [5/6] SSH key
+# [5/6] SSH key (id_ed25519)
 # ===========================================================
-Write-Host "  [5/6] SSH key (id_ed25519)        " -NoNewline
-$keyPath = "$env:USERPROFILE\.ssh\id_ed25519"
+Write-Host "  [5/6] SSH key (id_ed25519)    " -NoNewline
+$keyPath    = "$env:USERPROFILE\.ssh\id_ed25519"
+$sshKeygen  = "$env:SystemRoot\System32\OpenSSH\ssh-keygen.exe"
 if (Test-Path $keyPath) {
-    Write-Host "OK (already)" -ForegroundColor Green
-} else {
-    $sshKeygen = "$env:SystemRoot\System32\OpenSSH\ssh-keygen.exe"
-    if (-not (Test-Path $sshKeygen)) { $sshKeygen = (Get-Command ssh-keygen -EA SilentlyContinue)?.Source }
-    if ($sshKeygen -and (Test-Path $sshKeygen)) {
-        New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
-        & $sshKeygen -t ed25519 -f $keyPath -N '""' 2>$null | Out-Null
-        if (Test-Path $keyPath) { Write-Host "OK (generated)" -ForegroundColor Green }
-        else { Write-Host "FAIL (launcher will retry)" -ForegroundColor Red }
+    Write-Host "OK (already exists)" -ForegroundColor Green
+} elseif (Test-Path $sshKeygen) {
+    New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
+    & $sshKeygen -t ed25519 -f $keyPath -N "" 2>$null | Out-Null
+    if (Test-Path $keyPath) {
+        Write-Host "OK (generated)" -ForegroundColor Green
     } else {
-        Write-Host "SKIP (OpenSSH not ready — launcher will handle)" -ForegroundColor DarkGray
+        Write-Host "FAIL - launcher will retry" -ForegroundColor Red
+    }
+} else {
+    # Try PATH fallback (PS 5.1 compatible - no ?. operator)
+    $kgCmd = Get-Command ssh-keygen -ErrorAction SilentlyContinue
+    if ($kgCmd) {
+        New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
+        & $kgCmd.Source -t ed25519 -f $keyPath -N "" 2>$null | Out-Null
+        if (Test-Path $keyPath) {
+            Write-Host "OK (generated)" -ForegroundColor Green
+        } else {
+            Write-Host "FAIL - launcher will retry" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "SKIP - OpenSSH not ready, launcher will handle" -ForegroundColor DarkGray
     }
 }
 
@@ -170,7 +190,7 @@ Write-Host ""
 Write-Host "  Done." -ForegroundColor Green
 Write-Host ""
 
-# MARAN_QUIET=1 → auto-update flow (no prompt)
+# MARAN_QUIET=1 -> auto-update flow (no interactive prompt)
 if ($env:MARAN_QUIET -eq "1") {
     Start-Process -FilePath $exePath
     Write-Host "  [auto] Relaunched." -ForegroundColor Green
@@ -178,7 +198,7 @@ if ($env:MARAN_QUIET -eq "1") {
     $run = Read-Host "  Run now? (Y/n)"
     if ($run -ne "n" -and $run -ne "N") {
         Start-Process -FilePath $exePath
-        Write-Host "  Launched. Click [모두 자동 설치] inside the launcher." -ForegroundColor Cyan
+        Write-Host "  Launched. Click install-all inside the launcher." -ForegroundColor Cyan
     }
 }
 Write-Host ""
